@@ -2,7 +2,7 @@
 
 Convert SVG paths from Adobe Illustrator to parametric p5.js/Processing code with full transform control.
 
-[Check out the demo here.](aidanwyber.github.io/SVG-Parametriser/)
+[Check out the demo here.](https://aidanwyber.github.io/SVG-Parametriser/)
 
 ## Usage
 
