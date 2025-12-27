@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<link rel="icon" type="image/svg+xml" href="/vite.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>SVG Parametriser</title>
+	</head>
+	<body>
+		<div class="container">
+			<h1>SVG to p5.js Path Converter</h1>
+
+			<div class="info">
+				Drag and drop an SVG file from Adobe Illustrator. All
+				&lt;path&gt; elements will be converted to p5.js code.
+			</div>
+
+			<div class="options">
+				<div class="option-group">
+					<label class="option-label">Vector Format:</label>
+					<div class="radio-group">
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="vectorFormat"
+								value="Vec"
+								checked
+							/>
+							<span>Vec (custom class)</span>
+						</label>
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="vectorFormat"
+								value="createVector"
+							/>
+							<span>createVector (p5.js)</span>
+						</label>
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="vectorFormat"
+								value="Processing"
+							/>
+							<span>Processing (Java)</span>
+						</label>
+					</div>
+				</div>
+
+				<div class="option-group" id="processingVectorOption" style="display: none;">
+					<label class="option-label">Processing Vector:</label>
+					<div class="radio-group">
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="processingVector"
+								value="PVector"
+								checked
+							/>
+							<span>PVector</span>
+						</label>
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="processingVector"
+								value="Vec2D"
+							/>
+							<span>toxiclibs Vec2D</span>
+						</label>
+					</div>
+				</div>
+
+				<div class="option-group">
+					<label class="option-label">Language:</label>
+					<div class="radio-group">
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="language"
+								value="javascript"
+								checked
+							/>
+							<span>JavaScript</span>
+						</label>
+						<label class="radio-option">
+							<input
+								type="radio"
+								name="language"
+								value="typescript"
+							/>
+							<span>TypeScript</span>
+						</label>
+					</div>
+				</div>
+
+				<div class="option-group" id="instanceModeOption">
+					<label class="option-label">
+						<input
+							type="checkbox"
+							id="instanceMode"
+						/>
+						<span>Use p5 instance mode</span>
+					</label>
+				</div>
+
+				<div class="option-group">
+					<label class="option-label">Coordinate Multiplier:</label>
+					<input
+						type="number"
+						id="coordMultiplier"
+						value="1"
+						step="0.1"
+						min="0.001"
+					/>
+				</div>
+
+				<div class="option-group">
+					<label class="option-label">Decimal Precision:</label>
+					<input
+						type="number"
+						id="precision"
+						value="5"
+						step="1"
+						min="0"
+						max="10"
+					/>
+				</div>
+			</div>
+
+			<div class="drop-zone" id="dropZone">
+				<p>📁 Drag & drop SVG file here or click to browse</p>
+				<input
+					type="file"
+					id="fileInput"
+					accept=".svg"
+					style="display: none"
+				/>
+			</div>
+
+			<div id="output"></div>
+		</div>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
+		<script type="module" src="/src/main.ts"></script>
+	</body>
+</html>
