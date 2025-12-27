@@ -2,24 +2,7 @@
 
 Convert SVG paths from Adobe Illustrator to parametric p5.js/Processing code with full transform control.
 
-## Features
-
--   **Drag & drop** SVG files to convert all `<path>` elements
--   **Multiple output formats**: JavaScript, TypeScript, Processing (Java)
--   **Vector options**: Custom `Vec` class, p5.js `createVector`, Processing `PVector`/`Vec2D`
--   **Live preview** of each path with labeled control points
--   **Transform control**: Pre-translate, scale, rotate, translate via `transformConfig`
--   **p5 instance mode** support for all JS/TS formats
--   **Download complete file** with all paths and shared code
-
-## Quick Start
-
-```bash
-npm install
-npm run dev
-```
-
-Open browser to `http://localhost:5173`
+[Check out the demo here.](aidanwyber.github.io/SVG-Parametriser/)
 
 ## Usage
 
@@ -43,7 +26,7 @@ Open browser to `http://localhost:5173`
 
 Each path gets its own function:
 
-```javascript
+```js
 function drawPath1(p) {
 	const A = applyTransform(p.createVector(10, 20)),
 		B = applyTransform(p.createVector(30, 40));
@@ -59,7 +42,7 @@ function drawPath1(p) {
 
 Modify any transformation via `transformConfig`:
 
-```javascript
+```js
 transformConfig.preTranslateX = -50; // Center shape
 transformConfig.scaleX = 2; // Scale 2x horizontally
 transformConfig.rotation = Math.PI / 4; // Rotate 45°
