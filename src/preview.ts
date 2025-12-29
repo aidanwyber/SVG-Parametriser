@@ -163,7 +163,9 @@ export function createPreview(pathData: string, containerId: string): void {
 					currentPointIndex++;
 				}
 			});
-			p.endShape(p.CLOSE);
+			// Check if path ends with Z (close path) command
+			const hasClosePath = commands.length > 0 && commands[commands.length - 1].type === 'Z';
+			p.endShape(hasClosePath ? p.CLOSE : p.OPEN);
 
 			// Draw control point lines
 			p.stroke(255, 200, 100, 100);

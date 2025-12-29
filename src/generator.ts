@@ -247,6 +247,9 @@ export function convertPathToP5(
 			: 'applyTransform(';
 	const vertexPrefix = isInstanceMode ? 'p.' : '';
 
+	// Check if path ends with Z (close path) command
+	const hasClosePath = commands.length > 0 && commands[commands.length - 1].type === 'Z';
+
 	commands.forEach(cmd => {
 		if (cmd.type === 'M' || cmd.type === 'L') {
 			const pointName = getPointName(pointIndex);
@@ -320,7 +323,7 @@ ${indentedPoints}
 
 \t${shapePrefix}beginShape();
 ${indentedDrawCalls}
-\t${shapePrefix}endShape(CLOSE);
+\t${shapePrefix}endShape(${hasClosePath ? 'CLOSE' : 'OPEN'});
 }`;
 
 	return { sharedCode, pathCode };
