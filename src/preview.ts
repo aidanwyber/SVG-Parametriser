@@ -17,6 +17,10 @@ interface BoundingBox {
 	height: number;
 }
 
+interface PathColor {
+	stroke: [number, number, number];
+}
+
 /**
  * Extract all points from path commands
  */
@@ -252,6 +256,135 @@ export function createPreview(pathData: string, containerId: string): void {
 				`Size: ${bbox.width.toFixed(1)} × ${bbox.height.toFixed(1)}`,
 				10,
 				25
+			);
+		};
+	}, containerId);
+}
+
+/**
+ * Create a p5.js preview for all paths together with random colors
+ */
+export function createCombinedPreview(
+	pathsData: string[],
+	containerId: string
+): void {
+	const commandSets = pathsData
+		.map(pathData => parsePathData(pathData))
+		.filter(commands => commands.length > 0);
+	const allPoints = commandSets.flatMap(commands => extractPoints(commands));
+
+	if (allPoints.length === 0) return;
+
+	const bbox = calculateBoundingBox(allPoints);
+	const colors: PathColor[] = commandSets.map(() => {
+		const r = 80 + Math.floor(Math.random() * 176);
+		const g = 80 + Math.floor(Math.random() * 176);
+		const b = 80 + Math.floor(Math.random() * 176);
+		return {
+			stroke: [r, g, b],
+		};
+	});
+
+	new (window as any).p5((p: any) => {
+		const canvasSize = 500;
+		const padding = 30;
+		const drawArea = canvasSize - padding * 2;
+
+		const scaleX = bbox.width > 0 ? drawArea / bbox.width : 1;
+		const scaleY = bbox.height > 0 ? drawArea / bbox.height : 1;
+		const scale = Math.min(scaleX, scaleY);
+
+		const scaledWidth = bbox.width * scale;
+		const scaledHeight = bbox.height * scale;
+		const offsetX = (canvasSize - scaledWidth) / 2 - bbox.minX * scale;
+		const offsetY = (canvasSize - scaledHeight) / 2 - bbox.minY * scale;
+
+		const transformPoint = (x: number, y: number) => ({
+			x: x * scale + offsetX,
+			y: y * scale + offsetY,
+		});
+
+		p.setup = () => {
+			p.createCanvas(canvasSize, canvasSize);
+			p.noLoop();
+		};
+
+		p.draw = () => {
+			p.background(30);
+
+			// Draw grid
+			p.stroke(60);
+			p.strokeWeight(1);
+			for (let i = 0; i <= canvasSize; i += 50) {
+				p.line(i, 0, i, canvasSize);
+				p.line(0, i, canvasSize, i);
+			}
+
+			// Draw origin axes (at original SVG 0,0)
+			const origin = transformPoint(0, 0);
+			p.stroke(255, 100, 100);
+			p.strokeWeight(2);
+			p.line(0, origin.y, canvasSize, origin.y);
+
+			p.stroke(100, 255, 100);
+			p.strokeWeight(2);
+			p.line(origin.x, 0, origin.x, canvasSize);
+
+			// Draw origin point
+			p.noStroke();
+			p.fill(255, 200, 0);
+			p.circle(origin.x, origin.y, 10);
+
+			commandSets.forEach((commands, index) => {
+				const color = colors[index];
+				p.noFill();
+				p.stroke(color.stroke[0], color.stroke[1], color.stroke[2]);
+				p.strokeWeight(2);
+				p.beginShape();
+
+				let hasVertex = false;
+				commands.forEach(cmd => {
+					if (cmd.type === 'M' || cmd.type === 'L') {
+						const pt = transformPoint(cmd.x!, cmd.y!);
+						p.vertex(pt.x, pt.y);
+						hasVertex = true;
+					} else if (cmd.type === 'C') {
+						const cp1 = transformPoint(cmd.x1!, cmd.y1!);
+						const cp2 = transformPoint(cmd.x2!, cmd.y2!);
+						const end = transformPoint(cmd.x!, cmd.y!);
+						p.bezierVertex(
+							cp1.x,
+							cp1.y,
+							cp2.x,
+							cp2.y,
+							end.x,
+							end.y
+						);
+						hasVertex = true;
+					}
+				});
+
+				if (hasVertex) {
+					const hasClosePath =
+						commands.length > 0 &&
+						commands[commands.length - 1].type === 'Z';
+					p.endShape(hasClosePath ? p.CLOSE : p.OPEN);
+				} else {
+					p.endShape(p.OPEN);
+				}
+			});
+
+			// Draw scale and path count
+			p.fill(200);
+			p.noStroke();
+			p.textAlign(p.LEFT, p.TOP);
+			p.textSize(11);
+			p.text(`Paths: ${commandSets.length}`, 10, 10);
+			p.text(`Scale: ${scale.toFixed(3)}x`, 10, 25);
+			p.text(
+				`Size: ${bbox.width.toFixed(1)} x ${bbox.height.toFixed(1)}`,
+				10,
+				40
 			);
 		};
 	}, containerId);

@@ -2,17 +2,27 @@ import './style.css';
 import type {
 	VectorFormat,
 	Language,
+	DrawableShape,
 	GeneratorOptions,
 	ProcessingVector,
 } from './types';
 import { convertPathToP5, escapeHtml, generateDrawAllPaths } from './generator';
-import { createPreview } from './preview';
+import { createCombinedPreview, createPreview } from './preview';
+import { extractDrawableShapes } from './svgElements';
 
 const dropZone = document.getElementById('dropZone') as HTMLElement;
 const fileInput = document.getElementById('fileInput') as HTMLInputElement;
 const output = document.getElementById('output') as HTMLElement;
 
 let lastProcessedFile: File | null = null;
+let cleanupShapeNavigation: (() => void) | null = null;
+
+function toFunctionName(shapeName: string): string {
+	const sanitized = shapeName.replace(/[^a-zA-Z0-9_]/g, '_');
+	if (sanitized.length === 0) return 'shape';
+	if (/^[a-zA-Z_]/.test(sanitized)) return sanitized;
+	return `shape_${sanitized}`;
+}
 
 // Click to browse
 dropZone.addEventListener('click', () => fileInput.click());
@@ -100,15 +110,27 @@ function processSVG(file: File) {
 	const reader = new FileReader();
 
 	reader.onload = e => {
+		if (cleanupShapeNavigation) {
+			cleanupShapeNavigation();
+			cleanupShapeNavigation = null;
+		}
+
 		const svgContent = e.target?.result as string;
 		const parser = new DOMParser();
 		const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml');
 
-		const paths = svgDoc.querySelectorAll('path');
+		const drawableShapes = extractDrawableShapes(svgDoc).sort((a, b) => {
+			const typeA = a.primitive?.kind ?? 'path';
+			const typeB = b.primitive?.kind ?? 'path';
+			if (typeA === typeB) {
+				return a.sourceIndex - b.sourceIndex;
+			}
+			return typeA.localeCompare(typeB);
+		});
 
-		if (paths.length === 0) {
+		if (drawableShapes.length === 0) {
 			output.innerHTML =
-				'<div class="output"><p>No &lt;path&gt; elements found in this SVG.</p></div>';
+				'<div class="output"><p>No supported drawable elements found (path, line, polyline, polygon, rect, circle, ellipse).</p></div>';
 			return;
 		}
 
@@ -163,27 +185,41 @@ function processSVG(file: File) {
 		let html = '';
 		const pathsData: string[] = [];
 		const pathCodes: string[] = [];
+		const functionNames: string[] = [];
+		const shapeNames: string[] = [];
+		const typeCounts: Record<string, number> = {};
 
-		paths.forEach((path, index) => {
-			const d = path.getAttribute('d');
-			if (d) {
-				pathsData.push(d);
-				const generated = convertPathToP5(d, options, index);
+		drawableShapes.forEach((shape: DrawableShape, index) => {
+			pathsData.push(shape.pathData);
+			const baseType = shape.primitive?.kind ?? 'path';
+			typeCounts[baseType] = (typeCounts[baseType] || 0) + 1;
+			const shapeName = `${baseType}${typeCounts[baseType]}`;
+			const functionName = toFunctionName(shapeName);
+			shapeNames.push(shapeName);
+			functionNames.push(functionName);
 
-				// Use shared code from first path
-				if (index === 0) {
-					sharedCode = generated.sharedCode;
-				}
+			const generated = convertPathToP5(
+				shape.pathData,
+				options,
+				index,
+				shape,
+				functionName
+			);
 
-				// Collect path codes
-				pathCodes.push(generated.pathCode);
+			// Use shared code from first shape
+			if (index === 0) {
+				sharedCode = generated.sharedCode;
+			}
 
-				const previewId = `preview-${index}`;
-				html += `
-          <div class="output path-section">
+			// Collect shape code
+			pathCodes.push(generated.pathCode);
+
+			const previewId = `preview-${index}`;
+			html += `
+          <div class="output path-section" id="shape-section-${index}">
             <div class="path-header">
-              <h2>Path ${index + 1}</h2>
-              <button class="copy-btn" data-path="${index}">📋 Copy Code</button>
+              <h2>${shapeName} (svg #${shape.sourceIndex})</h2>
+              <button class="copy-btn" data-path="${index}">Copy Code</button>
             </div>
             <div class="content-grid">
               <div class="preview-container">
@@ -195,12 +231,11 @@ function processSVG(file: File) {
             </div>
           </div>
         `;
-			}
 		});
 
 		// Add drawAllPaths function to shared code
 		const drawAllPathsFunction = generateDrawAllPaths(
-			pathCodes.length,
+			functionNames,
 			options
 		);
 		const completeSharedCode = sharedCode + drawAllPathsFunction;
@@ -219,10 +254,10 @@ function processSVG(file: File) {
       <div class="command-section">
         <div class="command-header">
           <h2>Download Complete File</h2>
-          <button class="download-btn" data-filename="${fileName}">⬇️ Download ${fileName}</button>
+          <button class="download-btn" data-filename="${fileName}">Download ${fileName}</button>
         </div>
         <div class="command-content">
-          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Click the button above to download a file containing all the shared code and path functions.</p>
+          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Click the button above to download a file containing all the shared code and shape functions.</p>
         </div>
       </div>
     `;
@@ -232,7 +267,7 @@ function processSVG(file: File) {
       <div class="shared-code-section">
         <div class="shared-code-header">
           <h2>Shared Code</h2>
-          <button class="copy-btn" data-shared="true">📋 Copy Shared Code</button>
+          <button class="copy-btn" data-shared="true">Copy Shared Code</button>
         </div>
         <div class="shared-code-content">
           <pre><code>${escapeHtml(completeSharedCode)}</code></pre>
@@ -240,7 +275,40 @@ function processSVG(file: File) {
       </div>
     `;
 
-		output.innerHTML = downloadBlock + sharedCodeBlock + html;
+		const combinedPreviewBlock = `
+      <div class="combined-preview-section output">
+        <div class="combined-preview-header">
+          <h2>All paths</h2>
+        </div>
+        <div class="preview-container">
+          <div id="preview-all"></div>
+        </div>
+      </div>
+    `;
+
+		const navigationBlock = `
+      <div class="shape-nav">
+        <h3>Shapes</h3>
+        <ul class="shape-nav-list">
+          ${shapeNames
+				.map(
+					(name, index) => `
+            <li>
+              <button class="shape-nav-link" data-target="shape-section-${index}">${name}</button>
+            </li>
+          `
+				)
+				.join('')}
+        </ul>
+      </div>
+    `;
+
+		output.innerHTML =
+			navigationBlock +
+			downloadBlock +
+			sharedCodeBlock +
+			combinedPreviewBlock +
+			html;
 
 		// Add download functionality
 		const downloadBtn = output.querySelector(
@@ -257,7 +325,7 @@ function processSVG(file: File) {
 				URL.revokeObjectURL(url);
 
 				const originalText = downloadBtn.textContent;
-				downloadBtn.textContent = '✅ Downloaded!';
+				downloadBtn.textContent = 'Downloaded!';
 				setTimeout(() => {
 					downloadBtn.textContent = originalText;
 				}, 2000);
@@ -265,9 +333,13 @@ function processSVG(file: File) {
 		}
 
 		// Create previews after DOM is updated
+		createCombinedPreview(pathsData, 'preview-all');
+
 		pathsData.forEach((pathData, index) => {
 			createPreview(pathData, `preview-${index}`);
 		});
+
+		cleanupShapeNavigation = setupShapeNavigation();
 
 		// Add click handlers to copy buttons
 		const copyBtns = output.querySelectorAll('.copy-btn');
@@ -291,7 +363,7 @@ function processSVG(file: File) {
 
 				navigator.clipboard.writeText(code).then(() => {
 					const originalText = target.textContent;
-					target.textContent = '✅ Copied!';
+					target.textContent = 'Copied!';
 					setTimeout(() => {
 						target.textContent = originalText;
 					}, 2000);
@@ -301,4 +373,89 @@ function processSVG(file: File) {
 	};
 
 	reader.readAsText(file);
+}
+
+function setupShapeNavigation(): () => void {
+	const navLinks = Array.from(
+		output.querySelectorAll('.shape-nav-link')
+	) as HTMLButtonElement[];
+
+	if (navLinks.length === 0) {
+		return () => {};
+	}
+
+	const sections = navLinks
+		.map(link => {
+			const targetId = link.dataset.target;
+			return targetId ? document.getElementById(targetId) : null;
+		})
+		.filter((section): section is HTMLElement => section !== null);
+
+	if (sections.length === 0) {
+		return () => {};
+	}
+
+	const setActiveLink = (activeSection: HTMLElement) => {
+		navLinks.forEach(link => {
+			link.classList.toggle(
+				'is-active',
+				link.dataset.target === activeSection.id
+			);
+		});
+	};
+
+	const updateActiveFromViewportCenter = () => {
+		const viewportCenterY = window.innerHeight / 2;
+		let closestSection = sections[0];
+		let closestDistance = Number.POSITIVE_INFINITY;
+
+		sections.forEach(section => {
+			const rect = section.getBoundingClientRect();
+			const centerY = rect.top + rect.height / 2;
+			const distance = Math.abs(centerY - viewportCenterY);
+
+			if (distance < closestDistance) {
+				closestDistance = distance;
+				closestSection = section;
+			}
+		});
+
+		setActiveLink(closestSection);
+	};
+
+	const onLinkClick = (e: Event) => {
+		const link = e.currentTarget as HTMLButtonElement;
+		const targetId = link.dataset.target;
+		if (!targetId) return;
+		const target = document.getElementById(targetId);
+		if (!target) return;
+
+		target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+	};
+
+	navLinks.forEach(link => {
+		link.addEventListener('click', onLinkClick);
+	});
+
+	let ticking = false;
+	const onViewportChange = () => {
+		if (ticking) return;
+		ticking = true;
+		window.requestAnimationFrame(() => {
+			ticking = false;
+			updateActiveFromViewportCenter();
+		});
+	};
+
+	window.addEventListener('scroll', onViewportChange, { passive: true });
+	window.addEventListener('resize', onViewportChange);
+	updateActiveFromViewportCenter();
+
+	return () => {
+		navLinks.forEach(link => {
+			link.removeEventListener('click', onLinkClick);
+		});
+		window.removeEventListener('scroll', onViewportChange);
+		window.removeEventListener('resize', onViewportChange);
+	};
 }

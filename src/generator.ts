@@ -1,4 +1,9 @@
-import type { GeneratorOptions, GeneratedCode } from './types';
+import type {
+	DrawableShape,
+	GeneratorOptions,
+	GeneratedCode,
+	PrimitiveData,
+} from './types';
 import { parsePathData } from './parser';
 import { getPointName } from './utils';
 
@@ -67,6 +72,20 @@ ${vecType} applyTransform(${vecType} v) {
 	y += transformConfig.translateY;
 
 	return new ${vecType}(x, y);
+}
+
+float applyTransformScalar(float value) {
+	return applyTransformScalar(value, 'a');
+}
+
+float applyTransformScalar(float value, char axis) {
+	if (axis == 'x') {
+		return value * transformConfig.scaleX;
+	}
+	if (axis == 'y') {
+		return value * transformConfig.scaleY;
+	}
+	return value * ((abs(transformConfig.scaleX) + abs(transformConfig.scaleY)) * 0.5);
 }`;
 	}
 
@@ -140,6 +159,18 @@ const transform = Matrix2D.fromTransform(transformConfig);
 function applyTransform(v${isTS ? ': Vec' : ''})${isTS ? ': Vec' : ''} {
 	const [x, y] = transform.transform(v.x, v.y);
 	return new Vec(x, y);
+}
+
+function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
+			isTS ? ": 'x' | 'y' | 'avg'" : ''
+		} = 'avg')${isTS ? ': number' : ''} {
+	if (axis === 'x') {
+		return value * transformConfig.scaleX;
+	}
+	if (axis === 'y') {
+		return value * transformConfig.scaleY;
+	}
+	return value * ((Math.abs(transformConfig.scaleX) + Math.abs(transformConfig.scaleY)) * 0.5);
 }`;
 	}
 
@@ -193,7 +224,181 @@ function applyTransform(${pParam ? pParam + ', ' : ''}v${
 	y += transformConfig.translateY;
 
 	return ${vecConstructor}(x, y);
+}
+
+function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
+		isTS ? ": 'x' | 'y' | 'avg'" : ''
+	} = 'avg')${isTS ? ': number' : ''} {
+	if (axis === 'x') {
+		return value * transformConfig.scaleX;
+	}
+	if (axis === 'y') {
+		return value * transformConfig.scaleY;
+	}
+	return value * ((Math.abs(transformConfig.scaleX) + Math.abs(transformConfig.scaleY)) * 0.5);
 }`;
+}
+
+function getFunctionDeclaration(
+	functionName: string,
+	options: GeneratorOptions
+): string {
+	const { vectorFormat, language, instanceMode = false } = options;
+	const isTS = language === 'typescript';
+	const isProcessing = vectorFormat === 'Processing';
+	const isInstanceMode =
+		instanceMode &&
+		(vectorFormat === 'createVector' || vectorFormat === 'Vec');
+
+	if (isProcessing) {
+		return `void ${functionName}() {`;
+	}
+
+	const returnType = isTS ? ': void' : '';
+	const params = isInstanceMode ? (isTS ? 'p: any' : 'p') : '';
+	return `function ${functionName}(${params})${returnType} {`;
+}
+
+function getShapePrefix(options: GeneratorOptions): string {
+	const { vectorFormat, instanceMode = false } = options;
+	const isInstanceMode =
+		instanceMode &&
+		(vectorFormat === 'createVector' || vectorFormat === 'Vec');
+	return isInstanceMode ? 'p.' : '';
+}
+
+function generatePrimitiveDrawLines(
+	primitive: PrimitiveData,
+	options: GeneratorOptions,
+	coordMultiplier: number,
+	precision: number,
+	vecType: string,
+	vecConstructor: string,
+	applyTransformCall: string
+): { declarations: string[]; drawCalls: string[] } | null {
+	const isProcessing = options.vectorFormat === 'Processing';
+	const shapePrefix = getShapePrefix(options);
+	const f = (value: number) => formatNumber(value, coordMultiplier, precision);
+	const declarations: string[] = [];
+	const drawCalls: string[] = [];
+	const axisX = "'x'";
+	const axisY = "'y'";
+	const axisAvg = isProcessing ? "'a'" : "'avg'";
+
+	const addPointDeclaration = (name: string, x: number, y: number) => {
+		const valueExpr = `${applyTransformCall}${vecConstructor}(${f(x)}, ${f(y)}))`;
+		if (isProcessing) {
+			declarations.push(`${vecType} ${name} = ${valueExpr};`);
+		} else {
+			declarations.push(`const ${name} = ${valueExpr};`);
+		}
+	};
+
+	const addScalarDeclaration = (name: string, value: number, axis: string) => {
+		const valueExpr = `applyTransformScalar(${f(value)}, ${axis})`;
+		if (isProcessing) {
+			declarations.push(`float ${name} = ${valueExpr};`);
+		} else {
+			declarations.push(`const ${name} = ${valueExpr};`);
+		}
+	};
+
+	if (primitive.kind === 'line') {
+		if (
+			primitive.x1 == null ||
+			primitive.y1 == null ||
+			primitive.x2 == null ||
+			primitive.y2 == null
+		) {
+			return null;
+		}
+		addPointDeclaration('p1', primitive.x1, primitive.y1);
+		addPointDeclaration('p2', primitive.x2, primitive.y2);
+		drawCalls.push(`${shapePrefix}line(p1.x, p1.y, p2.x, p2.y);`);
+		return { declarations, drawCalls };
+	}
+
+	if (primitive.kind === 'polyline' || primitive.kind === 'polygon') {
+		const points = primitive.points || [];
+		if (points.length < 2) return null;
+
+		points.forEach(([x, y], index) => {
+			addPointDeclaration(`p${index}`, x, y);
+		});
+
+		drawCalls.push(`${shapePrefix}beginShape();`);
+		points.forEach((_, index) => {
+			drawCalls.push(`${shapePrefix}vertex(p${index}.x, p${index}.y);`);
+		});
+		drawCalls.push(
+			`${shapePrefix}endShape(${primitive.kind === 'polygon' ? 'CLOSE' : 'OPEN'});`
+		);
+		return { declarations, drawCalls };
+	}
+
+	if (primitive.kind === 'rect') {
+		if (
+			primitive.x == null ||
+			primitive.y == null ||
+			primitive.width == null ||
+			primitive.height == null
+		) {
+			return null;
+		}
+
+		addPointDeclaration('rectPos', primitive.x, primitive.y);
+		addScalarDeclaration('rectW', primitive.width, axisX);
+		addScalarDeclaration('rectH', primitive.height, axisY);
+
+		const rx = primitive.rx || 0;
+		const ry = primitive.ry || 0;
+		if (rx > 0 || ry > 0) {
+			// SVG supports independent rx/ry; rect() supports one radius value cleanly.
+			if (Math.abs(rx - ry) > 1e-9) {
+				return null;
+			}
+			addScalarDeclaration('rectR', rx, axisAvg);
+			drawCalls.push(
+				`${shapePrefix}rect(rectPos.x, rectPos.y, rectW, rectH, rectR);`
+			);
+		} else {
+			drawCalls.push(`${shapePrefix}rect(rectPos.x, rectPos.y, rectW, rectH);`);
+		}
+
+		return { declarations, drawCalls };
+	}
+
+	if (primitive.kind === 'circle') {
+		if (primitive.cx == null || primitive.cy == null || primitive.r == null) {
+			return null;
+		}
+		addPointDeclaration('circleCenter', primitive.cx, primitive.cy);
+		addScalarDeclaration('circleDiameter', primitive.r * 2, axisAvg);
+		drawCalls.push(
+			`${shapePrefix}circle(circleCenter.x, circleCenter.y, circleDiameter);`
+		);
+		return { declarations, drawCalls };
+	}
+
+	if (primitive.kind === 'ellipse') {
+		if (
+			primitive.cx == null ||
+			primitive.cy == null ||
+			primitive.rx == null ||
+			primitive.ry == null
+		) {
+			return null;
+		}
+		addPointDeclaration('ellipseCenter', primitive.cx, primitive.cy);
+		addScalarDeclaration('ellipseW', primitive.rx * 2, axisX);
+		addScalarDeclaration('ellipseH', primitive.ry * 2, axisY);
+		drawCalls.push(
+			`${shapePrefix}ellipse(ellipseCenter.x, ellipseCenter.y, ellipseW, ellipseH);`
+		);
+		return { declarations, drawCalls };
+	}
+
+	return null;
 }
 
 /**
@@ -202,24 +407,24 @@ function applyTransform(${pParam ? pParam + ', ' : ''}v${
 export function convertPathToP5(
 	pathData: string,
 	options: GeneratorOptions,
-	pathIndex: number
+	pathIndex: number,
+	shape?: DrawableShape,
+	functionNameInput?: string
 ): GeneratedCode {
 	const {
 		vectorFormat,
-		language,
 		coordMultiplier,
 		precision,
 		processingVector = 'PVector',
 		instanceMode = false,
 	} = options;
-	const commands = parsePathData(pathData);
-	let pointIndex = 0;
 
 	const isProcessing = vectorFormat === 'Processing';
 	const isVec2D = isProcessing && processingVector === 'Vec2D';
 	const isInstanceMode =
 		instanceMode &&
 		(vectorFormat === 'createVector' || vectorFormat === 'Vec');
+	const functionName = functionNameInput || `drawPath${pathIndex + 1}`;
 
 	const vecConstructor = isProcessing
 		? isVec2D
@@ -231,7 +436,6 @@ export function convertPathToP5(
 		? 'p.createVector'
 		: 'createVector';
 
-	const sharedCode = generateTransformSetup(options);
 	const pointDeclarations: string[] = [];
 	const drawCalls: string[] = [];
 
@@ -245,10 +449,44 @@ export function convertPathToP5(
 		isInstanceMode && vectorFormat === 'createVector'
 			? 'applyTransform(p, '
 			: 'applyTransform(';
-	const vertexPrefix = isInstanceMode ? 'p.' : '';
+	const sharedCode = generateTransformSetup(options);
+	const functionDeclaration = getFunctionDeclaration(functionName, options);
+	const shapePrefix = getShapePrefix(options);
+
+	if (shape?.primitive) {
+		const primitiveCode = generatePrimitiveDrawLines(
+			shape.primitive,
+			options,
+			coordMultiplier,
+			precision,
+			constKeyword,
+			vecConstructor,
+			applyTransformCall
+		);
+
+		if (primitiveCode) {
+			const primitiveDeclarations =
+				primitiveCode.declarations.length > 0
+					? `${primitiveCode.declarations
+							.map(line => `\t${line}`)
+							.join('\n')}\n\n`
+					: '';
+			const primitiveDrawCalls = primitiveCode.drawCalls
+				.map(line => `\t${line}`)
+				.join('\n');
+			const pathCode = `${functionDeclaration}
+${primitiveDeclarations}${primitiveDrawCalls}
+}`;
+			return { sharedCode, pathCode };
+		}
+	}
+
+	const commands = parsePathData(pathData);
+	let pointIndex = 0;
 
 	// Check if path ends with Z (close path) command
-	const hasClosePath = commands.length > 0 && commands[commands.length - 1].type === 'Z';
+	const hasClosePath =
+		commands.length > 0 && commands[commands.length - 1].type === 'Z';
 
 	commands.forEach(cmd => {
 		if (cmd.type === 'M' || cmd.type === 'L') {
@@ -258,9 +496,7 @@ export function convertPathToP5(
 			pointDeclarations.push(
 				`${pointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`
 			);
-			drawCalls.push(
-				`${vertexPrefix}vertex(${pointName}.x, ${pointName}.y);`
-			);
+			drawCalls.push(`${shapePrefix}vertex(${pointName}.x, ${pointName}.y);`);
 			pointIndex++;
 		} else if (cmd.type === 'C') {
 			const prevPointName = getPointName(pointIndex - 1);
@@ -286,35 +522,20 @@ export function convertPathToP5(
 			);
 
 			drawCalls.push(
-				`${vertexPrefix}bezierVertex(${cp1Name}.x, ${cp1Name}.y, ${cp2Name}.x, ${cp2Name}.y, ${nextPointName}.x, ${nextPointName}.y);`
+				`${shapePrefix}bezierVertex(${cp1Name}.x, ${cp1Name}.y, ${cp2Name}.x, ${cp2Name}.y, ${nextPointName}.x, ${nextPointName}.y);`
 			);
 			pointIndex++;
 		}
 	});
 
-	const isTS = language === 'typescript';
-	const functionName = `drawPath${pathIndex + 1}`;
-
-	let functionDeclaration: string;
 	let indentedPoints: string;
 	let indentedDrawCalls: string;
-	const shapePrefix = isInstanceMode ? 'p.' : '';
 
 	if (isProcessing) {
-		// Processing: void drawPath1() { ... }
-		functionDeclaration = `void ${functionName}() {`;
-		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(
-			',\n\t\t'
-		)};`;
+		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`;
 		indentedDrawCalls = drawCalls.map(call => `\t${call}`).join('\n');
 	} else {
-		// JavaScript/TypeScript: function drawPath1(): void { ... } or function drawPath1(p): void { ... }
-		const returnType = isTS ? ': void' : '';
-		const params = isInstanceMode ? (isTS ? 'p: any' : 'p') : '';
-		functionDeclaration = `function ${functionName}(${params})${returnType} {`;
-		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(
-			',\n\t\t'
-		)};`;
+		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`;
 		indentedDrawCalls = drawCalls.map(call => `\t${call}`).join('\n');
 	}
 
@@ -333,7 +554,7 @@ ${indentedDrawCalls}
  * Generate drawAllPaths function
  */
 export function generateDrawAllPaths(
-	pathCount: number,
+	functionNames: string[],
 	options: GeneratorOptions
 ): string {
 	const { vectorFormat, language, instanceMode = false } = options;
@@ -343,8 +564,8 @@ export function generateDrawAllPaths(
 		instanceMode &&
 		(vectorFormat === 'createVector' || vectorFormat === 'Vec');
 
-	const pathCalls = Array.from({ length: pathCount }, (_, i) => {
-		const functionName = `drawPath${i + 1}`;
+	const pathCalls = functionNames
+		.map(functionName => {
 		if (isProcessing) {
 			return `\t${functionName}();`;
 		} else {
@@ -352,7 +573,8 @@ export function generateDrawAllPaths(
 				? `\t${functionName}(p);`
 				: `\t${functionName}();`;
 		}
-	}).join('\n');
+		})
+		.join('\n');
 
 	if (isProcessing) {
 		return `\nvoid drawAllPaths() {\n${pathCalls}\n}`;

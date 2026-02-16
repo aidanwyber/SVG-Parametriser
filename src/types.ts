@@ -8,6 +8,38 @@ export interface PathCommand {
 	y2?: number;
 }
 
+export type PrimitiveKind =
+	| 'line'
+	| 'polyline'
+	| 'polygon'
+	| 'rect'
+	| 'circle'
+	| 'ellipse';
+
+export interface PrimitiveData {
+	kind: PrimitiveKind;
+	points?: Array<[number, number]>;
+	x?: number;
+	y?: number;
+	width?: number;
+	height?: number;
+	rx?: number;
+	ry?: number;
+	cx?: number;
+	cy?: number;
+	r?: number;
+	x1?: number;
+	y1?: number;
+	x2?: number;
+	y2?: number;
+}
+
+export interface DrawableShape {
+	pathData: string;
+	sourceIndex: number;
+	primitive?: PrimitiveData;
+}
+
 export type VectorFormat = 'Vec' | 'createVector' | 'Processing';
 export type Language = 'javascript' | 'typescript';
 export type ProcessingVector = 'PVector' | 'Vec2D';
