@@ -54,7 +54,7 @@ document.querySelectorAll('input[name="vectorFormat"]').forEach(radio => {
 // Re-process when any option changes
 document
 	.querySelectorAll(
-		'input[name="language"], input[name="processingVector"], input[name="sortMode"], #instanceMode',
+		'input[name="language"], input[name="processingVector"], input[name="sortMode"], #instanceMode, #showCoordinates',
 	)
 	.forEach(input => {
 		input.addEventListener('change', () => {
@@ -164,6 +164,9 @@ function processSVG(file: File) {
 		const instanceMode =
 			(document.getElementById('instanceMode') as HTMLInputElement)
 				?.checked || false;
+		const showCoordinates =
+			(document.getElementById('showCoordinates') as HTMLInputElement)
+				?.checked ?? true;
 
 		const sortMode =
 			((
@@ -370,7 +373,12 @@ function processSVG(file: File) {
 		);
 
 		pathsData.forEach((pathData, index) => {
-			createPreview(pathData, `preview-${index}`, drawableShapes[index]);
+			createPreview(
+				pathData,
+				`preview-${index}`,
+				drawableShapes[index],
+				showCoordinates,
+			);
 		});
 
 		cleanupShapeNavigation = setupShapeNavigation();

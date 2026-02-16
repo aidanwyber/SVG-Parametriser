@@ -211,6 +211,7 @@ export function createPreview(
 	pathData: string,
 	containerId: string,
 	shape?: DrawableShape,
+	showCoordinates = true,
 ): void {
 	const commands = parsePathData(pathData);
 	const points = extractPoints(commands);
@@ -322,14 +323,16 @@ export function createPreview(
 							p.textStyle(p.BOLD);
 							p.text(label, pt.x, pt.y - 16);
 
-							p.textSize(9);
-							p.textStyle(p.NORMAL);
-							p.fill(200);
-							p.text(
-								`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
-								pt.x,
-								pt.y + 16,
-							);
+							if (showCoordinates) {
+								p.textSize(9);
+								p.textStyle(p.NORMAL);
+								p.fill(200);
+								p.text(
+									`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+									pt.x,
+									pt.y + 16,
+								);
+							}
 						});
 					} else {
 					// Draw control point lines
@@ -399,14 +402,16 @@ export function createPreview(
 						p.text(point.name, pt.x, pt.y - labelOffset);
 
 						// Draw coordinate text
-						p.textSize(9);
-						p.textStyle(p.NORMAL);
-						p.fill(200);
-						p.text(
-							`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
-							pt.x,
-							pt.y + labelOffset + 3,
-						);
+						if (showCoordinates) {
+							p.textSize(9);
+							p.textStyle(p.NORMAL);
+							p.fill(200);
+							p.text(
+								`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+								pt.x,
+								pt.y + labelOffset + 3,
+							);
+						}
 					});
 				}
 
