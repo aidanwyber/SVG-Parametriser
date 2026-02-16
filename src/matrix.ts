@@ -16,7 +16,7 @@ export class Matrix2D {
 		public c: number = 0,
 		public d: number = 1,
 		public tx: number = 0,
-		public ty: number = 0
+		public ty: number = 0,
 	) {}
 
 	/**
@@ -46,7 +46,7 @@ export class Matrix2D {
 			scaleY * -sin, // c
 			scaleY * cos, // d
 			originX, // tx
-			originY // ty
+			originY, // ty
 		);
 	}
 
@@ -62,7 +62,7 @@ export class Matrix2D {
 	 */
 	toP5Code(): string {
 		return `// Transform: scale(${this.a.toFixed(2)}, ${this.d.toFixed(
-			2
+			2,
 		)}), rotate(${Math.atan2(this.b, this.a).toFixed(2)}), translate(${
 			this.tx
 		}, ${this.ty})`;
@@ -88,7 +88,7 @@ function applyTransform(v) {
  */
 export function generateP5TransformCode(
 	matrix: Matrix2D,
-	format: 'createVector' | 'PVector'
+	format: 'createVector' | 'PVector',
 ): string {
 	const vecConstructor =
 		format === 'createVector' ? 'createVector' : 'new p5.Vector';

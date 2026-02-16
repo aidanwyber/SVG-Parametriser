@@ -1,4 +1,4 @@
-import type { PathCommand } from './types';
+import type { DrawableShape, PathCommand, PrimitiveData } from './types';
 import { parsePathData } from './parser';
 import { getPointName } from './utils';
 
@@ -19,6 +19,16 @@ interface BoundingBox {
 
 interface PathColor {
 	stroke: [number, number, number];
+}
+
+interface XY {
+	x: number;
+	y: number;
+}
+
+interface LabeledPoint {
+	point: XY;
+	label: string;
 }
 
 /**
@@ -71,12 +81,141 @@ function calculateBoundingBox(points: Point[]): BoundingBox {
 	};
 }
 
+function averageXY(points: XY[]): XY | null {
+	if (points.length === 0) return null;
+	const sum = points.reduce(
+		(acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }),
+		{ x: 0, y: 0 },
+	);
+	return { x: sum.x / points.length, y: sum.y / points.length };
+}
+
+function polygonCentroid(points: Array<[number, number]>): XY | null {
+	if (points.length < 3) {
+		return averageXY(points.map(([x, y]) => ({ x, y })));
+	}
+
+	let twiceArea = 0;
+	let cx = 0;
+	let cy = 0;
+	for (let i = 0; i < points.length; i++) {
+		const [x0, y0] = points[i];
+		const [x1, y1] = points[(i + 1) % points.length];
+		const cross = x0 * y1 - x1 * y0;
+		twiceArea += cross;
+		cx += (x0 + x1) * cross;
+		cy += (y0 + y1) * cross;
+	}
+
+	if (Math.abs(twiceArea) < 1e-9) {
+		return averageXY(points.map(([x, y]) => ({ x, y })));
+	}
+
+	return {
+		x: cx / (3 * twiceArea),
+		y: cy / (3 * twiceArea),
+	};
+}
+
+function primitiveCentroid(primitive?: PrimitiveData): XY | null {
+	if (!primitive) return null;
+
+	if (primitive.kind === 'line') {
+		if (
+			primitive.x1 == null ||
+			primitive.y1 == null ||
+			primitive.x2 == null ||
+			primitive.y2 == null
+		) {
+			return null;
+		}
+		return {
+			x: (primitive.x1 + primitive.x2) / 2,
+			y: (primitive.y1 + primitive.y2) / 2,
+		};
+	}
+
+	if (primitive.kind === 'polyline') {
+		const pts = primitive.points || [];
+		return averageXY(pts.map(([x, y]) => ({ x, y })));
+	}
+
+	if (primitive.kind === 'polygon') {
+		return polygonCentroid(primitive.points || []);
+	}
+
+	if (primitive.kind === 'rect') {
+		if (
+			primitive.x == null ||
+			primitive.y == null ||
+			primitive.width == null ||
+			primitive.height == null
+		) {
+			return null;
+		}
+		return {
+			x: primitive.x + primitive.width / 2,
+			y: primitive.y + primitive.height / 2,
+		};
+	}
+
+	if (primitive.kind === 'circle') {
+		if (primitive.cx == null || primitive.cy == null) return null;
+		return { x: primitive.cx, y: primitive.cy };
+	}
+
+	if (primitive.kind === 'ellipse') {
+		if (primitive.cx == null || primitive.cy == null) return null;
+		return { x: primitive.cx, y: primitive.cy };
+	}
+
+	return null;
+}
+
+function primitiveReferenceLabel(primitive?: PrimitiveData): string {
+	if (!primitive) return 'reference';
+	if (primitive.kind === 'line') return 'midpoint';
+	if (primitive.kind === 'polyline' || primitive.kind === 'polygon') {
+		return 'centroid';
+	}
+	return 'center';
+}
+
+function primitivePreviewPoints(primitive?: PrimitiveData): LabeledPoint[] {
+	if (!primitive) return [];
+
+	if (primitive.kind === 'line') {
+		if (
+			primitive.x1 == null ||
+			primitive.y1 == null ||
+			primitive.x2 == null ||
+			primitive.y2 == null
+		) {
+			return [];
+		}
+		return [
+			{ point: { x: primitive.x1, y: primitive.y1 }, label: 'start' },
+			{ point: { x: primitive.x2, y: primitive.y2 }, label: 'end' },
+		];
+	}
+
+	const centroid = primitiveCentroid(primitive);
+	if (!centroid) return [];
+	return [{ point: centroid, label: primitiveReferenceLabel(primitive) }];
+}
+
 /**
  * Create a p5.js instance mode preview for a path
  */
-export function createPreview(pathData: string, containerId: string): void {
+export function createPreview(
+	pathData: string,
+	containerId: string,
+	shape?: DrawableShape,
+): void {
 	const commands = parsePathData(pathData);
 	const points = extractPoints(commands);
+	const primitivePoints = primitivePreviewPoints(shape?.primitive);
+	const isPrimitiveShape = !!shape?.primitive;
 
 	if (points.length === 0) return;
 
@@ -149,102 +288,127 @@ export function createPreview(pathData: string, containerId: string): void {
 			p.strokeWeight(2);
 			p.beginShape();
 
-			let currentPointIndex = 0;
 			commands.forEach(cmd => {
 				if (cmd.type === 'M') {
 					const pt = transformPoint(cmd.x!, cmd.y!);
 					p.vertex(pt.x, pt.y);
-					currentPointIndex++;
 				} else if (cmd.type === 'L') {
 					const pt = transformPoint(cmd.x!, cmd.y!);
 					p.vertex(pt.x, pt.y);
-					currentPointIndex++;
 				} else if (cmd.type === 'C') {
 					const cp1 = transformPoint(cmd.x1!, cmd.y1!);
 					const cp2 = transformPoint(cmd.x2!, cmd.y2!);
 					const end = transformPoint(cmd.x!, cmd.y!);
 					p.bezierVertex(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
-					currentPointIndex++;
 				}
 			});
 			// Check if path ends with Z (close path) command
-			const hasClosePath = commands.length > 0 && commands[commands.length - 1].type === 'Z';
+			const hasClosePath =
+				commands.length > 0 &&
+				commands[commands.length - 1].type === 'Z';
 			p.endShape(hasClosePath ? p.CLOSE : p.OPEN);
 
-			// Draw control point lines
-			p.stroke(255, 200, 100, 100);
-			p.strokeWeight(1);
-			let pointIdx = 0;
-			commands.forEach(cmd => {
-				if (cmd.type === 'C') {
-					const prevPoint = points.find(
-						pt => pt.name === String.fromCharCode(65 + pointIdx - 1)
-					);
-					const cp1Point = points.find(
-						pt => pt.name === prevPoint?.name + 'c'
-					);
-					const cp2Point = points.find(
-						pt =>
-							pt.name === 'c' + String.fromCharCode(65 + pointIdx)
-					);
-					const endPoint = points.find(
-						pt => pt.name === String.fromCharCode(65 + pointIdx)
-					);
+					if (isPrimitiveShape && primitivePoints.length > 0) {
+						// Primitives: show only relevant primitive points.
+						primitivePoints.forEach(({ point, label }) => {
+							const pt = transformPoint(point.x, point.y);
+							p.noStroke();
+							p.fill(255, 220, 120);
+							p.circle(pt.x, pt.y, 12);
 
-					if (prevPoint && cp1Point) {
-						const pt1 = transformPoint(prevPoint.x, prevPoint.y);
-						const pt2 = transformPoint(cp1Point.x, cp1Point.y);
-						p.line(pt1.x, pt1.y, pt2.x, pt2.y);
-					}
-					if (cp2Point && endPoint) {
-						const pt1 = transformPoint(cp2Point.x, cp2Point.y);
-						const pt2 = transformPoint(endPoint.x, endPoint.y);
-						p.line(pt1.x, pt1.y, pt2.x, pt2.y);
-					}
-					pointIdx++;
-				} else if (cmd.type === 'M' || cmd.type === 'L') {
-					pointIdx++;
+							p.fill(255);
+							p.textAlign(p.CENTER, p.CENTER);
+							p.textSize(12);
+							p.textStyle(p.BOLD);
+							p.text(label, pt.x, pt.y - 16);
+
+							p.textSize(9);
+							p.textStyle(p.NORMAL);
+							p.fill(200);
+							p.text(
+								`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+								pt.x,
+								pt.y + 16,
+							);
+						});
+					} else {
+					// Draw control point lines
+					p.stroke(255, 200, 100, 100);
+					p.strokeWeight(1);
+					let pointIdx = 0;
+					commands.forEach(cmd => {
+						if (cmd.type === 'C') {
+							const prevPoint = points.find(
+								pt =>
+									pt.name === String.fromCharCode(65 + pointIdx - 1),
+							);
+							const cp1Point = points.find(
+								pt => pt.name === prevPoint?.name + 'c',
+							);
+							const cp2Point = points.find(
+								pt =>
+									pt.name ===
+									'c' + String.fromCharCode(65 + pointIdx),
+							);
+							const endPoint = points.find(
+								pt => pt.name === String.fromCharCode(65 + pointIdx),
+							);
+
+							if (prevPoint && cp1Point) {
+								const pt1 = transformPoint(prevPoint.x, prevPoint.y);
+								const pt2 = transformPoint(cp1Point.x, cp1Point.y);
+								p.line(pt1.x, pt1.y, pt2.x, pt2.y);
+							}
+							if (cp2Point && endPoint) {
+								const pt1 = transformPoint(cp2Point.x, cp2Point.y);
+								const pt2 = transformPoint(endPoint.x, endPoint.y);
+								p.line(pt1.x, pt1.y, pt2.x, pt2.y);
+							}
+							pointIdx++;
+						} else if (cmd.type === 'M' || cmd.type === 'L') {
+							pointIdx++;
+						}
+					});
+
+					// Draw points and labels
+					points.forEach(point => {
+						const pt = transformPoint(point.x, point.y);
+
+						// Determine if it's a control point
+						const isControlPoint = point.name.includes('c');
+
+						// Draw point
+						p.noStroke();
+						if (isControlPoint) {
+							p.fill(255, 200, 100); // Orange for control points
+							p.circle(pt.x, pt.y, 8);
+						} else {
+							p.fill(100, 255, 150); // Green for main points
+							p.circle(pt.x, pt.y, 10);
+						}
+
+						// Draw label
+						p.fill(255);
+						p.noStroke();
+						p.textAlign(p.CENTER, p.CENTER);
+						p.textSize(12);
+						p.textStyle(p.BOLD);
+
+						// Position label slightly offset from point
+						const labelOffset = 15;
+						p.text(point.name, pt.x, pt.y - labelOffset);
+
+						// Draw coordinate text
+						p.textSize(9);
+						p.textStyle(p.NORMAL);
+						p.fill(200);
+						p.text(
+							`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+							pt.x,
+							pt.y + labelOffset + 3,
+						);
+					});
 				}
-			});
-
-			// Draw points and labels
-			points.forEach(point => {
-				const pt = transformPoint(point.x, point.y);
-
-				// Determine if it's a control point
-				const isControlPoint = point.name.includes('c');
-
-				// Draw point
-				p.noStroke();
-				if (isControlPoint) {
-					p.fill(255, 200, 100); // Orange for control points
-					p.circle(pt.x, pt.y, 8);
-				} else {
-					p.fill(100, 255, 150); // Green for main points
-					p.circle(pt.x, pt.y, 10);
-				}
-
-				// Draw label
-				p.fill(255);
-				p.noStroke();
-				p.textAlign(p.CENTER, p.CENTER);
-				p.textSize(12);
-				p.textStyle(p.BOLD);
-
-				// Position label slightly offset from point
-				const labelOffset = 15;
-				p.text(point.name, pt.x, pt.y - labelOffset);
-
-				// Draw coordinate text
-				p.textSize(9);
-				p.textStyle(p.NORMAL);
-				p.fill(200);
-				p.text(
-					`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
-					pt.x,
-					pt.y + labelOffset + 3
-				);
-			});
 
 			// Draw scale info
 			p.fill(200);
@@ -255,7 +419,7 @@ export function createPreview(pathData: string, containerId: string): void {
 			p.text(
 				`Size: ${bbox.width.toFixed(1)} × ${bbox.height.toFixed(1)}`,
 				10,
-				25
+				25,
 			);
 		};
 	}, containerId);
@@ -266,17 +430,23 @@ export function createPreview(pathData: string, containerId: string): void {
  */
 export function createCombinedPreview(
 	pathsData: string[],
-	containerId: string
+	shapeIds: number[],
+	containerId: string,
+	shapes: DrawableShape[] = [],
 ): void {
-	const commandSets = pathsData
-		.map(pathData => parsePathData(pathData))
-		.filter(commands => commands.length > 0);
-	const allPoints = commandSets.flatMap(commands => extractPoints(commands));
+	const parsedPaths = pathsData
+		.map((pathData, index) => ({
+			id: shapeIds[index] ?? index + 1,
+			commands: parsePathData(pathData),
+			primitive: shapes[index]?.primitive,
+		}))
+		.filter(item => item.commands.length > 0);
+	const allPoints = parsedPaths.flatMap(item => extractPoints(item.commands));
 
 	if (allPoints.length === 0) return;
 
 	const bbox = calculateBoundingBox(allPoints);
-	const colors: PathColor[] = commandSets.map(() => {
+	const colors: PathColor[] = parsedPaths.map(() => {
 		const r = 80 + Math.floor(Math.random() * 176);
 		const g = 80 + Math.floor(Math.random() * 176);
 		const b = 80 + Math.floor(Math.random() * 176);
@@ -335,7 +505,8 @@ export function createCombinedPreview(
 			p.fill(255, 200, 0);
 			p.circle(origin.x, origin.y, 10);
 
-			commandSets.forEach((commands, index) => {
+			parsedPaths.forEach((item, index) => {
+				const commands = item.commands;
 				const color = colors[index];
 				p.noFill();
 				p.stroke(color.stroke[0], color.stroke[1], color.stroke[2]);
@@ -358,7 +529,7 @@ export function createCombinedPreview(
 							cp2.x,
 							cp2.y,
 							end.x,
-							end.y
+							end.y,
 						);
 						hasVertex = true;
 					}
@@ -374,17 +545,37 @@ export function createCombinedPreview(
 				}
 			});
 
+			// Label each path start with its numeric ID
+			p.noStroke();
+			p.fill(255);
+			p.textAlign(p.CENTER, p.CENTER);
+			p.textSize(11);
+			p.textStyle(p.BOLD);
+			parsedPaths.forEach(item => {
+				const centroidFromPrimitive = primitiveCentroid(item.primitive);
+				const centroidFromPath = averageXY(
+					extractPoints(item.commands).map(point => ({
+						x: point.x,
+						y: point.y,
+					})),
+				);
+				const labelPoint = centroidFromPrimitive ?? centroidFromPath;
+				if (!labelPoint) return;
+				const pt = transformPoint(labelPoint.x, labelPoint.y);
+				p.text(String(item.id), pt.x, pt.y);
+			});
+
 			// Draw scale and path count
 			p.fill(200);
 			p.noStroke();
 			p.textAlign(p.LEFT, p.TOP);
 			p.textSize(11);
-			p.text(`Paths: ${commandSets.length}`, 10, 10);
+			p.text(`Paths: ${parsedPaths.length}`, 10, 10);
 			p.text(`Scale: ${scale.toFixed(3)}x`, 10, 25);
 			p.text(
 				`Size: ${bbox.width.toFixed(1)} x ${bbox.height.toFixed(1)}`,
 				10,
-				40
+				40,
 			);
 		};
 	}, containerId);

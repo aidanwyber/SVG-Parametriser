@@ -82,9 +82,12 @@ export function parsePathData(pathData: string): PathCommand[] {
 		} else if (type === 'C') {
 			for (let i = 0; i + 5 < coords.length; i += 6) {
 				const x1 = isRelative ? currentX + coords[i] : coords[i];
-				const y1 = isRelative ? currentY + coords[i + 1] : coords[i + 1];
-				const x2 = isRelative ? currentX + coords[i + 2] : coords[i + 2];
-				const y2 = isRelative ? currentY + coords[i + 3] : coords[i + 3];
+				const y1 =
+					isRelative ? currentY + coords[i + 1] : coords[i + 1];
+				const x2 =
+					isRelative ? currentX + coords[i + 2] : coords[i + 2];
+				const y2 =
+					isRelative ? currentY + coords[i + 3] : coords[i + 3];
 				const x = isRelative ? currentX + coords[i + 4] : coords[i + 4];
 				const y = isRelative ? currentY + coords[i + 5] : coords[i + 5];
 
@@ -110,7 +113,8 @@ export function parsePathData(pathData: string): PathCommand[] {
 				}
 
 				const x2 = isRelative ? currentX + coords[i] : coords[i];
-				const y2 = isRelative ? currentY + coords[i + 1] : coords[i + 1];
+				const y2 =
+					isRelative ? currentY + coords[i + 1] : coords[i + 1];
 				const x = isRelative ? currentX + coords[i + 2] : coords[i + 2];
 				const y = isRelative ? currentY + coords[i + 3] : coords[i + 3];
 

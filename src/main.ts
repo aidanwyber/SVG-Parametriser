@@ -32,7 +32,7 @@ document.querySelectorAll('input[name="vectorFormat"]').forEach(radio => {
 	radio.addEventListener('change', e => {
 		const target = e.target as HTMLInputElement;
 		const processingOption = document.getElementById(
-			'processingVectorOption'
+			'processingVectorOption',
 		);
 		const instanceModeOption =
 			document.getElementById('instanceModeOption');
@@ -54,7 +54,7 @@ document.querySelectorAll('input[name="vectorFormat"]').forEach(radio => {
 // Re-process when any option changes
 document
 	.querySelectorAll(
-		'input[name="language"], input[name="processingVector"], #instanceMode'
+		'input[name="language"], input[name="processingVector"], input[name="sortMode"], #instanceMode',
 	)
 	.forEach(input => {
 		input.addEventListener('change', () => {
@@ -119,16 +119,9 @@ function processSVG(file: File) {
 		const parser = new DOMParser();
 		const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml');
 
-		const drawableShapes = extractDrawableShapes(svgDoc).sort((a, b) => {
-			const typeA = a.primitive?.kind ?? 'path';
-			const typeB = b.primitive?.kind ?? 'path';
-			if (typeA === typeB) {
-				return a.sourceIndex - b.sourceIndex;
-			}
-			return typeA.localeCompare(typeB);
-		});
+		const extractedShapes = extractDrawableShapes(svgDoc);
 
-		if (drawableShapes.length === 0) {
+		if (extractedShapes.length === 0) {
 			output.innerHTML =
 				'<div class="output"><p>No supported drawable elements found (path, line, polyline, polygon, rect, circle, ellipse).</p></div>';
 			return;
@@ -138,39 +131,46 @@ function processSVG(file: File) {
 		const vectorFormat =
 			((
 				document.querySelector(
-					'input[name="vectorFormat"]:checked'
+					'input[name="vectorFormat"]:checked',
 				) as HTMLInputElement
 			)?.value as VectorFormat) || 'Vec';
 
 		const language =
 			((
 				document.querySelector(
-					'input[name="language"]:checked'
+					'input[name="language"]:checked',
 				) as HTMLInputElement
 			)?.value as Language) || 'javascript';
 
 		const coordMultiplier =
 			parseFloat(
 				(document.getElementById('coordMultiplier') as HTMLInputElement)
-					?.value
+					?.value,
 			) || 1;
 
 		const precision =
 			parseInt(
 				(document.getElementById('precision') as HTMLInputElement)
-					?.value
+					?.value,
 			) || 5;
 
 		const processingVector =
 			((
 				document.querySelector(
-					'input[name="processingVector"]:checked'
+					'input[name="processingVector"]:checked',
 				) as HTMLInputElement
 			)?.value as ProcessingVector) || 'PVector';
 
 		const instanceMode =
 			(document.getElementById('instanceMode') as HTMLInputElement)
 				?.checked || false;
+
+		const sortMode =
+			((
+				document.querySelector(
+					'input[name="sortMode"]:checked',
+				) as HTMLInputElement
+			)?.value as 'primitive' | 'svg') || 'primitive';
 
 		const options: GeneratorOptions = {
 			vectorFormat,
@@ -181,20 +181,51 @@ function processSVG(file: File) {
 			instanceMode,
 		};
 
+		// Shape IDs and names are fixed by the imported SVG chronology.
+		const shapeMetaByRef = new Map<
+			DrawableShape,
+			{ id: number; name: string; functionName: string }
+		>();
+		extractedShapes.forEach((shape, index) => {
+			const id = index + 1;
+			const baseType = shape.primitive?.kind ?? 'path';
+			const name = `${baseType}${id}`;
+			shapeMetaByRef.set(shape, {
+				id,
+				name,
+				functionName: toFunctionName(name),
+			});
+		});
+
+		const drawableShapes = [...extractedShapes].sort((a, b) => {
+			if (sortMode === 'svg') {
+				return a.sourceIndex - b.sourceIndex;
+			}
+
+			const typeA = a.primitive?.kind ?? 'path';
+			const typeB = b.primitive?.kind ?? 'path';
+			if (typeA === typeB) {
+				return a.sourceIndex - b.sourceIndex;
+			}
+			return typeA.localeCompare(typeB);
+		});
+
 		let sharedCode = '';
 		let html = '';
 		const pathsData: string[] = [];
+		const shapeIds: number[] = [];
 		const pathCodes: string[] = [];
 		const functionNames: string[] = [];
 		const shapeNames: string[] = [];
-		const typeCounts: Record<string, number> = {};
 
 		drawableShapes.forEach((shape: DrawableShape, index) => {
+			const shapeMeta = shapeMetaByRef.get(shape);
+			if (!shapeMeta) return;
+
 			pathsData.push(shape.pathData);
-			const baseType = shape.primitive?.kind ?? 'path';
-			typeCounts[baseType] = (typeCounts[baseType] || 0) + 1;
-			const shapeName = `${baseType}${typeCounts[baseType]}`;
-			const functionName = toFunctionName(shapeName);
+			shapeIds.push(shapeMeta.id);
+			const shapeName = shapeMeta.name;
+			const functionName = shapeMeta.functionName;
 			shapeNames.push(shapeName);
 			functionNames.push(functionName);
 
@@ -203,7 +234,7 @@ function processSVG(file: File) {
 				options,
 				index,
 				shape,
-				functionName
+				functionName,
 			);
 
 			// Use shared code from first shape
@@ -236,17 +267,15 @@ function processSVG(file: File) {
 		// Add drawAllPaths function to shared code
 		const drawAllPathsFunction = generateDrawAllPaths(
 			functionNames,
-			options
+			options,
 		);
 		const completeSharedCode = sharedCode + drawAllPathsFunction;
 
 		// Generate downloadable file
 		const fileExtension =
-			vectorFormat === 'Processing'
-				? 'pde'
-				: language === 'typescript'
-				? 'ts'
-				: 'js';
+			vectorFormat === 'Processing' ? 'pde'
+			: language === 'typescript' ? 'ts'
+			: 'js';
 		const fileName = `draw-paths.${fileExtension}`;
 		const fullCode = `${completeSharedCode}\n\n${pathCodes.join('\n\n')}`;
 
@@ -296,7 +325,7 @@ function processSVG(file: File) {
             <li>
               <button class="shape-nav-link" data-target="shape-section-${index}">${name}</button>
             </li>
-          `
+          `,
 				)
 				.join('')}
         </ul>
@@ -312,7 +341,7 @@ function processSVG(file: File) {
 
 		// Add download functionality
 		const downloadBtn = output.querySelector(
-			'.download-btn'
+			'.download-btn',
 		) as HTMLButtonElement;
 		if (downloadBtn) {
 			downloadBtn.addEventListener('click', () => {
@@ -333,10 +362,15 @@ function processSVG(file: File) {
 		}
 
 		// Create previews after DOM is updated
-		createCombinedPreview(pathsData, 'preview-all');
+		createCombinedPreview(
+			pathsData,
+			shapeIds,
+			'preview-all',
+			drawableShapes,
+		);
 
 		pathsData.forEach((pathData, index) => {
-			createPreview(pathData, `preview-${index}`);
+			createPreview(pathData, `preview-${index}`, drawableShapes[index]);
 		});
 
 		cleanupShapeNavigation = setupShapeNavigation();
@@ -351,7 +385,7 @@ function processSVG(file: File) {
 				let code = '';
 				if (isShared) {
 					const sharedSection = target.closest(
-						'.shared-code-section'
+						'.shared-code-section',
 					);
 					code =
 						sharedSection?.querySelector('code')?.textContent || '';
@@ -377,7 +411,7 @@ function processSVG(file: File) {
 
 function setupShapeNavigation(): () => void {
 	const navLinks = Array.from(
-		output.querySelectorAll('.shape-nav-link')
+		output.querySelectorAll('.shape-nav-link'),
 	) as HTMLButtonElement[];
 
 	if (navLinks.length === 0) {
@@ -399,7 +433,7 @@ function setupShapeNavigation(): () => void {
 		navLinks.forEach(link => {
 			link.classList.toggle(
 				'is-active',
-				link.dataset.target === activeSection.id
+				link.dataset.target === activeSection.id,
 			);
 		});
 	};

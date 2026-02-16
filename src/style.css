@@ -57,7 +57,10 @@ body {
 	padding: 6px 8px;
 	cursor: pointer;
 	font-size: 13px;
-	transition: border-color 0.2s, background 0.2s, color 0.2s;
+	transition:
+		border-color 0.2s,
+		background 0.2s,
+		color 0.2s;
 }
 
 .shape-nav-link:hover {

@@ -38,7 +38,10 @@ function lineToShape(element: Element): DrawableShape {
 	};
 }
 
-function polylineToShape(element: Element, close: boolean): DrawableShape | null {
+function polylineToShape(
+	element: Element,
+	close: boolean,
+): DrawableShape | null {
 	const points = parsePoints(element.getAttribute('points'));
 	if (points.length < 2) return null;
 
@@ -64,7 +67,7 @@ function rectPathData(
 	width: number,
 	height: number,
 	rx: number,
-	ry: number
+	ry: number,
 ): string {
 	if (rx === 0 || ry === 0) {
 		return `M ${x} ${y} L ${x + width} ${y} L ${x + width} ${
@@ -128,7 +131,12 @@ function rectToShape(element: Element): DrawableShape | null {
 	};
 }
 
-function ellipsePathData(cx: number, cy: number, rx: number, ry: number): string {
+function ellipsePathData(
+	cx: number,
+	cy: number,
+	rx: number,
+	ry: number,
+): string {
 	const kx = rx * KAPPA;
 	const ky = ry * KAPPA;
 
