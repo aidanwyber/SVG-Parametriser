@@ -17,8 +17,38 @@ const functionPrefixInput = document.getElementById(
 ) as HTMLInputElement;
 const output = document.getElementById('output') as HTMLElement;
 
-let lastProcessedFile: File | null = null;
+interface ParsedFileData {
+	file: File;
+	fileIndex: number;
+	shapes: DrawableShape[];
+}
+
+interface FileGroup {
+	file: File;
+	fileIndex: number;
+	filePrefix: string;
+	drawAllFunctionName: string;
+}
+
+interface ShapeEntry {
+	fileIndex: number;
+	fileName: string;
+	shape: DrawableShape;
+	functionName: string;
+	globalId: number;
+}
+
+interface FileDrawingDownload {
+	codeKey: string;
+	code: string;
+	drawAllFunctionName: string;
+	fileName: string;
+	sourceFileName: string;
+}
+
+let lastProcessedFiles: File[] = [];
 let cleanupShapeNavigation: (() => void) | null = null;
+let processRequestId = 0;
 
 function getFileStem(fileName: string): string {
 	const extensionIndex = fileName.lastIndexOf('.');
@@ -28,25 +58,101 @@ function getFileStem(fileName: string): string {
 	return fileName.slice(0, extensionIndex);
 }
 
-function sanitizeIdentifierPrefix(prefix: string): string {
-	const collapsed = prefix
+function sanitizeFunctionIdentifier(name: string): string {
+	const compact = name
 		.trim()
 		.replace(/[^a-zA-Z0-9_]/g, '_')
 		.replace(/_+/g, '_')
 		.replace(/^_+|_+$/g, '');
 
-	if (collapsed.length === 0) return 'shape';
-	if (/^[a-zA-Z_]/.test(collapsed)) return collapsed;
-	return `shape_${collapsed}`;
+	if (compact.length === 0) return 'shape';
+	if (/^[a-zA-Z_]/.test(compact)) return compact;
+	return `_${compact}`;
 }
 
-function getFunctionName(prefix: string, shapeId: number): string {
-	return `${prefix}_path${shapeId}`;
+function sanitizeIdentifierPrefix(prefix: string): string {
+	return sanitizeFunctionIdentifier(prefix);
+}
+
+function makeUniquePrefixes(prefixes: string[]): string[] {
+	const used = new Set<string>();
+	const counts = new Map<string, number>();
+
+	return prefixes.map(prefix => {
+		if (!used.has(prefix)) {
+			used.add(prefix);
+			counts.set(prefix, 1);
+			return prefix;
+		}
+
+		let nextIndex = (counts.get(prefix) || 1) + 1;
+		let candidate = `${prefix}_${nextIndex}`;
+		while (used.has(candidate)) {
+			nextIndex += 1;
+			candidate = `${prefix}_${nextIndex}`;
+		}
+
+		counts.set(prefix, nextIndex);
+		used.add(candidate);
+		return candidate;
+	});
+}
+
+function getFunctionName(
+	prefix: string,
+	primitiveKind: string | undefined,
+	shapeId: number,
+): string {
+	const kind = primitiveKind || 'path';
+	return sanitizeFunctionIdentifier(`${prefix}_${kind}${shapeId}`);
+}
+
+function getDrawAllFunctionName(prefix: string): string {
+	return sanitizeFunctionIdentifier(`${prefix}_drawAllPaths`);
 }
 
 function defaultFunctionPrefix(file: File): string {
 	const stem = getFileStem(file.name).trim();
 	return stem.length > 0 ? stem : 'shape';
+}
+
+function sanitizeDownloadStem(fileName: string, extension: string): string {
+	const stem = getFileStem(fileName).trim();
+	if (extension === 'pde') {
+		const normalized = stem
+			.replace(/[^a-zA-Z0-9_]/g, '_')
+			.replace(/_+/g, '_')
+			.replace(/^_+|_+$/g, '');
+		if (normalized.length === 0) return 'drawing';
+		return /^[0-9]/.test(normalized) ? `_${normalized}` : normalized;
+	}
+
+	const normalized = stem
+		.replace(/[^a-zA-Z0-9._-]/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return normalized.length > 0 ? normalized : 'drawing';
+}
+
+function createDownloadFileName(baseName: string, extension: string): string {
+	if (extension === 'pde') {
+		const normalized = baseName
+			.replace(/[^a-zA-Z0-9_]/g, '_')
+			.replace(/_+/g, '_')
+			.replace(/^_+|_+$/g, '');
+		const nonEmpty = normalized.length > 0 ? normalized : 'drawing';
+		const safe = /^[0-9]/.test(nonEmpty) ? `_${nonEmpty}` : nonEmpty;
+		return `${safe}.pde`;
+	}
+	return `${baseName}.${extension}`;
+}
+
+function isSvgFile(file: File): boolean {
+	return file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
+}
+
+function getSvgFiles(fileList: FileList | File[]): File[] {
+	return Array.from(fileList).filter(isSvgFile);
 }
 
 // Click to browse
@@ -70,8 +176,8 @@ document.querySelectorAll('input[name="vectorFormat"]').forEach(radio => {
 			instanceModeOption.style.display =
 				target.value === 'Processing' ? 'none' : 'flex';
 		}
-		if (lastProcessedFile) {
-			processSVG(lastProcessedFile);
+		if (lastProcessedFiles.length > 0) {
+			void processSVGFiles(lastProcessedFiles);
 		}
 	});
 });
@@ -83,24 +189,24 @@ document
 	)
 	.forEach(input => {
 		input.addEventListener('change', () => {
-			if (lastProcessedFile) {
-				processSVG(lastProcessedFile);
+			if (lastProcessedFiles.length > 0) {
+				void processSVGFiles(lastProcessedFiles);
 			}
 		});
 	});
 
 document.querySelectorAll('#coordMultiplier, #precision').forEach(input => {
 	input.addEventListener('change', () => {
-		if (lastProcessedFile) {
-			processSVG(lastProcessedFile);
+		if (lastProcessedFiles.length > 0) {
+			void processSVGFiles(lastProcessedFiles);
 		}
 	});
 });
 
 if (functionPrefixInput) {
 	functionPrefixInput.addEventListener('input', () => {
-		if (lastProcessedFile) {
-			processSVG(lastProcessedFile);
+		if (lastProcessedFiles.length > 0) {
+			void processSVGFiles(lastProcessedFiles);
 		}
 	});
 }
@@ -119,184 +225,292 @@ dropZone.addEventListener('drop', e => {
 	e.preventDefault();
 	dropZone.classList.remove('dragover');
 
-	const file = e.dataTransfer?.files[0];
-	if (file && file.type === 'image/svg+xml') {
-		processSVG(file);
-	} else {
-		alert('Please drop a valid SVG file');
+	const droppedFiles = e.dataTransfer?.files;
+	if (!droppedFiles) {
+		alert('Please drop at least one SVG file');
+		return;
 	}
+
+	const svgFiles = getSvgFiles(droppedFiles);
+	if (svgFiles.length === 0) {
+		alert('Please drop at least one valid SVG file');
+		return;
+	}
+
+	void processSVGFiles(svgFiles);
 });
 
 // File input handler
 fileInput.addEventListener('change', e => {
-	const file = (e.target as HTMLInputElement).files?.[0];
-	if (file) {
-		processSVG(file);
-	}
+	const files = (e.target as HTMLInputElement).files;
+	if (!files) return;
+
+	const svgFiles = getSvgFiles(files);
+	if (svgFiles.length === 0) return;
+
+	void processSVGFiles(svgFiles);
 });
 
 /**
- * Process uploaded SVG file and generate p5.js code
+ * Process uploaded SVG files and generate p5.js code
  */
-function processSVG(file: File) {
-	if (functionPrefixInput && file !== lastProcessedFile) {
-		functionPrefixInput.value = defaultFunctionPrefix(file);
+async function processSVGFiles(files: File[]): Promise<void> {
+	const svgFiles = files.filter(isSvgFile);
+	if (svgFiles.length === 0) {
+		return;
 	}
 
-	lastProcessedFile = file;
-	const reader = new FileReader();
+	const isMultiFile = svgFiles.length > 1;
+	const isSameSingleFile =
+		lastProcessedFiles.length === 1 &&
+		svgFiles.length === 1 &&
+		lastProcessedFiles[0] === svgFiles[0];
 
-	reader.onload = e => {
-		if (cleanupShapeNavigation) {
-			cleanupShapeNavigation();
-			cleanupShapeNavigation = null;
+	if (functionPrefixInput) {
+		functionPrefixInput.disabled = isMultiFile;
+		if (isMultiFile) {
+			functionPrefixInput.value = 'Auto per file';
+			functionPrefixInput.title =
+				'Disabled for multi-file imports. Filename prefixes are used automatically.';
+		} else {
+			functionPrefixInput.title = '';
+			if (!isSameSingleFile) {
+				functionPrefixInput.value = defaultFunctionPrefix(svgFiles[0]);
+			}
 		}
+	}
 
-		const svgContent = e.target?.result as string;
-		const parser = new DOMParser();
-		const svgDoc = parser.parseFromString(svgContent, 'image/svg+xml');
+	lastProcessedFiles = [...svgFiles];
+	const requestId = ++processRequestId;
 
-		const extractedShapes = extractDrawableShapes(svgDoc);
-
-		if (extractedShapes.length === 0) {
-			output.innerHTML =
-				'<div class="output"><p>No supported drawable elements found (path, line, polyline, polygon, rect, circle, ellipse).</p></div>';
-			return;
-		}
-
-		// Get all options
-		const vectorFormat =
-			((
-				document.querySelector(
-					'input[name="vectorFormat"]:checked',
-				) as HTMLInputElement
-			)?.value as VectorFormat) || 'Vec';
-
-		const language =
-			((
-				document.querySelector(
-					'input[name="language"]:checked',
-				) as HTMLInputElement
-			)?.value as Language) || 'javascript';
-
-		const coordMultiplier =
-			parseFloat(
-				(document.getElementById('coordMultiplier') as HTMLInputElement)
-					?.value,
-			) || 1;
-
-		const precision =
-			parseInt(
-				(document.getElementById('precision') as HTMLInputElement)
-					?.value,
-			) || 5;
-
-		const processingVector =
-			((
-				document.querySelector(
-					'input[name="processingVector"]:checked',
-				) as HTMLInputElement
-			)?.value as ProcessingVector) || 'PVector';
-
-		const instanceMode =
-			(document.getElementById('instanceMode') as HTMLInputElement)
-				?.checked || false;
-		const showCoordinates =
-			(document.getElementById('showCoordinates') as HTMLInputElement)
-				?.checked ?? true;
-
-		const sortMode =
-			((
-				document.querySelector(
-					'input[name="sortMode"]:checked',
-				) as HTMLInputElement
-			)?.value as 'primitive' | 'svg') || 'primitive';
-		const rawPrefix =
-			functionPrefixInput?.value ?? defaultFunctionPrefix(file);
-		const functionPrefix = sanitizeIdentifierPrefix(
-			rawPrefix.length > 0 ? rawPrefix : defaultFunctionPrefix(file),
+	let parsedFiles: ParsedFileData[] = [];
+	try {
+		parsedFiles = await Promise.all(
+			svgFiles.map(async (file, fileIndex) => {
+				const svgContent = await file.text();
+				const parser = new DOMParser();
+				const svgDoc = parser.parseFromString(
+					svgContent,
+					'image/svg+xml',
+				);
+				return {
+					file,
+					fileIndex,
+					shapes: extractDrawableShapes(svgDoc),
+				};
+			}),
 		);
+	} catch {
+		if (requestId !== processRequestId) return;
+		output.innerHTML =
+			'<div class="output"><p>Could not read one or more SVG files.</p></div>';
+		return;
+	}
 
-		const options: GeneratorOptions = {
-			vectorFormat,
-			language,
-			coordMultiplier,
-			precision,
-			processingVector,
-			instanceMode,
+	if (requestId !== processRequestId) return;
+
+	if (cleanupShapeNavigation) {
+		cleanupShapeNavigation();
+		cleanupShapeNavigation = null;
+	}
+
+	const parsedWithShapes = parsedFiles.filter(fileData => fileData.shapes.length > 0);
+	if (parsedWithShapes.length === 0) {
+		output.innerHTML =
+			'<div class="output"><p>No supported drawable elements found (path, line, polyline, polygon, rect, circle, ellipse).</p></div>';
+		return;
+	}
+
+	// Get all options
+	const vectorFormat =
+		((
+			document.querySelector(
+				'input[name="vectorFormat"]:checked',
+			) as HTMLInputElement
+		)?.value as VectorFormat) || 'Vec';
+
+	const language =
+		((
+			document.querySelector(
+				'input[name="language"]:checked',
+			) as HTMLInputElement
+		)?.value as Language) || 'javascript';
+
+	const coordMultiplier =
+		parseFloat(
+			(document.getElementById('coordMultiplier') as HTMLInputElement)
+				?.value,
+		) || 1;
+
+	const precision =
+		parseInt(
+			(document.getElementById('precision') as HTMLInputElement)
+				?.value,
+		) || 5;
+
+	const processingVector =
+		((
+			document.querySelector(
+				'input[name="processingVector"]:checked',
+			) as HTMLInputElement
+		)?.value as ProcessingVector) || 'PVector';
+
+	const instanceMode =
+		(document.getElementById('instanceMode') as HTMLInputElement)
+			?.checked || false;
+	const showCoordinates =
+		(document.getElementById('showCoordinates') as HTMLInputElement)
+			?.checked ?? true;
+
+	const sortMode =
+		((
+			document.querySelector(
+				'input[name="sortMode"]:checked',
+			) as HTMLInputElement
+		)?.value as 'primitive' | 'svg') || 'primitive';
+
+	const options: GeneratorOptions = {
+		vectorFormat,
+		language,
+		coordMultiplier,
+		precision,
+		processingVector,
+		instanceMode,
+	};
+
+	const singlePrefix = sanitizeIdentifierPrefix(
+		functionPrefixInput?.value || defaultFunctionPrefix(parsedWithShapes[0].file),
+	);
+	const filePrefixes =
+		isMultiFile ?
+			makeUniquePrefixes(
+				parsedWithShapes.map(fileData =>
+					sanitizeIdentifierPrefix(defaultFunctionPrefix(fileData.file)),
+				),
+			)
+		:	[singlePrefix];
+
+	const fileGroups: FileGroup[] = parsedWithShapes.map((fileData, index) => {
+		const filePrefix =
+			isMultiFile ? filePrefixes[index] : singlePrefix;
+		return {
+			file: fileData.file,
+			fileIndex: fileData.fileIndex,
+			filePrefix,
+			drawAllFunctionName: getDrawAllFunctionName(filePrefix),
 		};
+	});
 
-		// Shape IDs and names are fixed by the imported SVG chronology.
-		const shapeMetaByRef = new Map<
-			DrawableShape,
-			{ id: number; name: string; functionName: string }
-		>();
-		extractedShapes.forEach((shape, index) => {
-			const id = index + 1;
-			const baseType = shape.primitive?.kind ?? 'path';
-			const name = `${baseType}${id}`;
-			shapeMetaByRef.set(shape, {
-				id,
-				name,
-				functionName: getFunctionName(functionPrefix, id),
+	const allShapeEntries: ShapeEntry[] = [];
+	let nextGlobalId = 1;
+	parsedWithShapes.forEach((fileData, groupIndex) => {
+		const group = fileGroups[groupIndex];
+		fileData.shapes.forEach((shape, shapeIndex) => {
+			allShapeEntries.push({
+				fileIndex: fileData.fileIndex,
+				fileName: fileData.file.name,
+				shape,
+				functionName: getFunctionName(
+					group.filePrefix,
+					shape.primitive?.kind,
+					shapeIndex + 1,
+				),
+				globalId: nextGlobalId++,
 			});
 		});
+	});
 
-		const drawableShapes = [...extractedShapes].sort((a, b) => {
-			if (sortMode === 'svg') {
-				return a.sourceIndex - b.sourceIndex;
+	const sortedEntries = [...allShapeEntries].sort((a, b) => {
+		if (sortMode === 'svg') {
+			if (a.fileIndex !== b.fileIndex) {
+				return a.fileIndex - b.fileIndex;
 			}
+			return a.shape.sourceIndex - b.shape.sourceIndex;
+		}
 
-			const typeA = a.primitive?.kind ?? 'path';
-			const typeB = b.primitive?.kind ?? 'path';
-			if (typeA === typeB) {
-				return a.sourceIndex - b.sourceIndex;
+		const typeA = a.shape.primitive?.kind ?? 'path';
+		const typeB = b.shape.primitive?.kind ?? 'path';
+		if (typeA === typeB) {
+			if (a.fileIndex !== b.fileIndex) {
+				return a.fileIndex - b.fileIndex;
 			}
-			return typeA.localeCompare(typeB);
-		});
+			return a.shape.sourceIndex - b.shape.sourceIndex;
+		}
+		return typeA.localeCompare(typeB);
+	});
 
-		let sharedCode = '';
-		let html = '';
-		const pathsData: string[] = [];
-		const shapeIds: number[] = [];
-		const pathCodes: string[] = [];
-		const functionNames: string[] = [];
-		const shapeNames: string[] = [];
+	const orderedFunctionNames = sortedEntries.map(entry => entry.functionName);
+	const orderedFunctionNamesByFile = new Map<number, string[]>();
+	sortedEntries.forEach(entry => {
+		const namesForFile = orderedFunctionNamesByFile.get(entry.fileIndex) || [];
+		namesForFile.push(entry.functionName);
+		orderedFunctionNamesByFile.set(entry.fileIndex, namesForFile);
+	});
 
-		drawableShapes.forEach((shape: DrawableShape, index) => {
-			const shapeMeta = shapeMetaByRef.get(shape);
-			if (!shapeMeta) return;
+	let sharedCode = '';
+	let html = '';
+	const pathsData: string[] = [];
+	const shapeIds: number[] = [];
+	const previewShapes: DrawableShape[] = [];
+	const previewDataByFile = new Map<
+		number,
+		{
+			previewId: string;
+			fileName: string;
+			pathsData: string[];
+			shapeIds: number[];
+			shapes: DrawableShape[];
+		}
+	>();
+	const pathCodesOrdered: string[] = [];
+	const pathCodeByFunctionName = new Map<string, string>();
+	const navigationFunctionNames: string[] = [];
 
-			pathsData.push(shape.pathData);
-			shapeIds.push(shapeMeta.id);
-			const shapeName = shapeMeta.name;
-			const functionName = shapeMeta.functionName;
-			shapeNames.push(shapeName);
-			functionNames.push(functionName);
+	sortedEntries.forEach((entry, index) => {
+		pathsData.push(entry.shape.pathData);
+		shapeIds.push(entry.globalId);
+		previewShapes.push(entry.shape);
+		navigationFunctionNames.push(entry.functionName);
+		let previewData = previewDataByFile.get(entry.fileIndex);
+		if (!previewData) {
+			previewData = {
+				previewId: `preview-all-file-${entry.fileIndex}`,
+				fileName: entry.fileName,
+				pathsData: [],
+				shapeIds: [],
+				shapes: [],
+			};
+			previewDataByFile.set(entry.fileIndex, previewData);
+		}
+		previewData.pathsData.push(entry.shape.pathData);
+		previewData.shapeIds.push(entry.globalId);
+		previewData.shapes.push(entry.shape);
 
-			const generated = convertPathToP5(
-				shape.pathData,
-				options,
-				index,
-				shape,
-				functionName,
-			);
+		const generated = convertPathToP5(
+			entry.shape.pathData,
+			options,
+			index,
+			entry.shape,
+			entry.functionName,
+		);
 
-			// Use shared code from first shape
-			if (index === 0) {
-				sharedCode = generated.sharedCode;
-			}
+		// Use shared code from first shape
+		if (index === 0) {
+			sharedCode = generated.sharedCode;
+		}
 
-			// Collect shape code
-			pathCodes.push(generated.pathCode);
+		// Collect shape code
+		pathCodesOrdered.push(generated.pathCode);
+		pathCodeByFunctionName.set(entry.functionName, generated.pathCode);
 
-			const previewId = `preview-${index}`;
-			html += `
+		const previewId = `preview-${index}`;
+		html += `
           <div class="output path-section" id="shape-section-${index}">
             <div class="path-header">
-              <h2>${shapeName} (svg #${shape.sourceIndex})</h2>
+              <h2>${escapeHtml(entry.functionName)}</h2>
               <button class="copy-btn" data-path="${index}">Copy Code</button>
             </div>
+            <p class="path-meta">${escapeHtml(entry.fileName)} · svg #${entry.shape.sourceIndex}</p>
             <div class="content-grid">
               <div class="preview-container">
                 <div id="${previewId}"></div>
@@ -307,36 +521,113 @@ function processSVG(file: File) {
             </div>
           </div>
         `;
+	});
+
+	const sharedTransformCode = sharedCode.trim();
+	const shapeFunctionsCode = pathCodesOrdered.join('\n\n').trim();
+
+	const perFileDrawAllCodes: string[] = [];
+	let topLevelDrawAllCode = '';
+
+	if (isMultiFile) {
+		const perFileDrawAllNames: string[] = [];
+		fileGroups.forEach(group => {
+			const fileFunctionNames =
+				orderedFunctionNamesByFile.get(group.fileIndex) || [];
+			if (fileFunctionNames.length === 0) return;
+			perFileDrawAllNames.push(group.drawAllFunctionName);
+			perFileDrawAllCodes.push(
+				generateDrawAllPaths(
+					fileFunctionNames,
+					options,
+					group.drawAllFunctionName,
+				).trim(),
+			);
 		});
 
-		const drawAllPathsFunction = generateDrawAllPaths(
-			functionNames,
+		topLevelDrawAllCode = generateDrawAllPaths(
+			perFileDrawAllNames,
 			options,
 		).trim();
-		const sharedTransformCode = sharedCode.trim();
-		const shapeFunctionsCode = pathCodes.join('\n\n').trim();
-		const drawingCode = [drawAllPathsFunction, shapeFunctionsCode]
-			.filter(section => section.length > 0)
-			.join('\n\n');
-		const fullCode = [sharedTransformCode, drawingCode]
-			.filter(section => section.length > 0)
-			.join('\n\n');
+	} else {
+		topLevelDrawAllCode = generateDrawAllPaths(
+			orderedFunctionNames,
+			options,
+		).trim();
+	}
 
-		const codeByKey: Record<string, string> = {
-			complete: fullCode,
-			drawing: drawingCode,
-			shared: sharedTransformCode,
-		};
+	const drawingCode = [
+		topLevelDrawAllCode,
+		...perFileDrawAllCodes,
+		shapeFunctionsCode,
+	]
+		.filter(section => section.length > 0)
+		.join('\n\n');
+	const fullCode = [sharedTransformCode, drawingCode]
+		.filter(section => section.length > 0)
+		.join('\n\n');
 
-		const fileExtension =
-			vectorFormat === 'Processing' ? 'pde'
-			: language === 'typescript' ? 'ts'
-			: 'js';
-		const completeFileName = `draw-paths.${fileExtension}`;
-		const drawingFileName = `draw-paths-drawing.${fileExtension}`;
-		const sharedFileName = `draw-paths-shared.${fileExtension}`;
+	const fileExtension =
+		vectorFormat === 'Processing' ? 'pde'
+		: language === 'typescript' ? 'ts'
+		: 'js';
+	const completeFileName = createDownloadFileName(
+		'draw-paths',
+		fileExtension,
+	);
+	const drawingFileName = createDownloadFileName(
+		'draw-paths-drawing',
+		fileExtension,
+	);
+	const sharedFileName = createDownloadFileName(
+		'draw-paths-shared',
+		fileExtension,
+	);
 
-		const exportBlock = `
+	const perFileDrawingDownloads: FileDrawingDownload[] = [];
+	if (isMultiFile) {
+		fileGroups.forEach(group => {
+			const fileFunctionNames =
+				orderedFunctionNamesByFile.get(group.fileIndex) || [];
+			if (fileFunctionNames.length === 0) return;
+
+			const fileDrawAllCode = generateDrawAllPaths(
+				fileFunctionNames,
+				options,
+				group.drawAllFunctionName,
+			).trim();
+			const filePathCode = fileFunctionNames
+				.map(functionName => pathCodeByFunctionName.get(functionName) || '')
+				.filter(section => section.length > 0)
+				.join('\n\n')
+				.trim();
+			const fileDrawingCode = [fileDrawAllCode, filePathCode]
+				.filter(section => section.length > 0)
+				.join('\n\n');
+
+			perFileDrawingDownloads.push({
+				codeKey: `drawing-file-${group.filePrefix}`,
+				code: fileDrawingCode,
+				drawAllFunctionName: group.drawAllFunctionName,
+				fileName: createDownloadFileName(
+					`${sanitizeDownloadStem(group.file.name, fileExtension)}${fileExtension === 'pde' ? '_' : '-'}drawing`,
+					fileExtension,
+				),
+				sourceFileName: group.file.name,
+			});
+		});
+	}
+
+	const codeByKey: Record<string, string> = {
+		complete: fullCode,
+		drawing: drawingCode,
+		shared: sharedTransformCode,
+	};
+	perFileDrawingDownloads.forEach(entry => {
+		codeByKey[entry.codeKey] = entry.code;
+	});
+
+	const exportBlock = `
       <div class="command-section">
         <div class="command-header">
           <h2>Complete File</h2>
@@ -349,21 +640,54 @@ function processSVG(file: File) {
           <p style="margin: 0; padding: 15px; color: #9cdcfe;">Includes shared transform code and all generated drawing functions.</p>
         </div>
       </div>
-      <div class="command-section">
-        <div class="command-header">
-          <h2>Drawing Code Only</h2>
+    `;
+
+	const drawingCodeBlock = `
+      <div class="shared-code-section drawing-code-section">
+        <div class="shared-code-header">
+          <h2>Drawing Code</h2>
           <div class="action-buttons">
             <button class="copy-btn" data-code-key="drawing">Copy Drawing Code</button>
             <button class="download-btn" data-code-key="drawing" data-filename="${drawingFileName}">Download ${drawingFileName}</button>
           </div>
         </div>
-        <div class="command-content">
-          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Includes draw calls and shape functions without the shared transform section.</p>
+        <div class="shared-code-content">
+          <pre><code>${escapeHtml(drawingCode)}</code></pre>
         </div>
       </div>
     `;
 
-		const sharedCodeBlock = `
+	const perFileDrawingDownloadsBlock =
+		perFileDrawingDownloads.length > 0 ?
+			`
+	      <div class="command-section">
+	        <div class="command-header">
+	          <h2>Per-file Drawing Downloads</h2>
+        </div>
+        <div class="command-content">
+          <div class="command-content-inner">
+            <div class="per-file-actions">
+	              ${perFileDrawingDownloads
+								.map(
+									entry => `
+	                <div class="per-file-action-row">
+	                  <div class="per-file-action-label">${escapeHtml(entry.sourceFileName)}</div>
+	                  <div class="action-buttons action-buttons-start">
+	                    <button class="copy-btn" data-code-key="${entry.codeKey}">Copy ${escapeHtml(entry.fileName)}</button>
+	                    <button class="download-btn" data-code-key="${entry.codeKey}" data-filename="${entry.fileName}">Download ${escapeHtml(entry.fileName)}</button>
+	                  </div>
+	                </div>
+	              `,
+								)
+								.join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    `
+		:	'';
+
+	const sharedCodeBlock = `
       <div class="shared-code-section">
         <div class="shared-code-header">
           <h2>Shared Code</h2>
@@ -378,7 +702,35 @@ function processSVG(file: File) {
       </div>
     `;
 
-		const combinedPreviewBlock = `
+	const combinedPreviewBlock =
+		isMultiFile ?
+			`
+      <div class="combined-preview-section output">
+        <div class="combined-preview-header">
+          <h2>All paths by file</h2>
+        </div>
+        <div class="combined-preview-grid">
+          ${fileGroups
+						.map(group => {
+							const previewData = previewDataByFile.get(group.fileIndex);
+							if (!previewData || previewData.pathsData.length === 0) {
+								return '';
+							}
+
+							return `
+            <div class="combined-preview-file">
+              <h3>${escapeHtml(previewData.fileName)}</h3>
+              <div class="preview-container">
+                <div id="${previewData.previewId}"></div>
+              </div>
+            </div>
+          `;
+						})
+						.join('')}
+        </div>
+      </div>
+    `
+		:	`
       <div class="combined-preview-section output">
         <div class="combined-preview-header">
           <h2>All paths</h2>
@@ -389,106 +741,121 @@ function processSVG(file: File) {
       </div>
     `;
 
-		const navigationBlock = `
+	const navigationBlock = `
       <div class="shape-nav">
         <h3>Shapes</h3>
         <ul class="shape-nav-list">
-          ${shapeNames
-				.map(
-					(name, index) => `
+          ${navigationFunctionNames
+						.map(
+							(functionName, index) => `
             <li>
-              <button class="shape-nav-link" data-target="shape-section-${index}">${name}</button>
+              <button class="shape-nav-link" data-target="shape-section-${index}">${escapeHtml(functionName)}</button>
             </li>
           `,
-				)
-				.join('')}
+						)
+						.join('')}
         </ul>
       </div>
     `;
 
-		output.innerHTML =
-			navigationBlock +
-			exportBlock +
-			sharedCodeBlock +
-			combinedPreviewBlock +
-			html;
+	output.innerHTML =
+		navigationBlock +
+		exportBlock +
+		drawingCodeBlock +
+		perFileDrawingDownloadsBlock +
+		sharedCodeBlock +
+		combinedPreviewBlock +
+		html;
 
-		// Create previews after DOM is updated
+	// Create previews after DOM is updated
+	if (isMultiFile) {
+		fileGroups.forEach(group => {
+			const previewData = previewDataByFile.get(group.fileIndex);
+			if (!previewData || previewData.pathsData.length === 0) {
+				return;
+			}
+
+			createCombinedPreview(
+				previewData.pathsData,
+				previewData.shapeIds,
+				previewData.previewId,
+				previewData.shapes,
+			);
+		});
+	} else {
 		createCombinedPreview(
 			pathsData,
 			shapeIds,
 			'preview-all',
-			drawableShapes,
+			previewShapes,
 		);
+	}
 
-		pathsData.forEach((pathData, index) => {
-			createPreview(
-				pathData,
-				`preview-${index}`,
-				drawableShapes[index],
-				showCoordinates,
-			);
+	pathsData.forEach((pathData, index) => {
+		createPreview(
+			pathData,
+			`preview-${index}`,
+			previewShapes[index],
+			showCoordinates,
+		);
+	});
+
+	cleanupShapeNavigation = setupShapeNavigation();
+
+	const downloadBtns = output.querySelectorAll(
+		'.download-btn[data-code-key]',
+	) as NodeListOf<HTMLButtonElement>;
+	downloadBtns.forEach(downloadBtn => {
+		downloadBtn.addEventListener('click', () => {
+			const codeKey = downloadBtn.dataset.codeKey;
+			const fileName = downloadBtn.dataset.filename;
+			if (!codeKey || !fileName) return;
+
+			const code = codeByKey[codeKey];
+			if (!code) return;
+
+			const blob = new Blob([code], { type: 'text/plain' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = fileName;
+			a.click();
+			URL.revokeObjectURL(url);
+
+			const originalText = downloadBtn.textContent;
+			downloadBtn.textContent = 'Downloaded!';
+			setTimeout(() => {
+				downloadBtn.textContent = originalText;
+			}, 2000);
 		});
+	});
 
-		cleanupShapeNavigation = setupShapeNavigation();
+	// Add click handlers to copy buttons
+	const copyBtns = output.querySelectorAll('.copy-btn');
+	copyBtns.forEach(btn => {
+		btn.addEventListener('click', e => {
+			const target = e.currentTarget as HTMLButtonElement;
+			const codeKey = target.dataset.codeKey;
 
-		const downloadBtns = output.querySelectorAll(
-			'.download-btn[data-code-key]',
-		) as NodeListOf<HTMLButtonElement>;
-		downloadBtns.forEach(downloadBtn => {
-			downloadBtn.addEventListener('click', () => {
-				const codeKey = downloadBtn.dataset.codeKey;
-				const fileName = downloadBtn.dataset.filename;
-				if (!codeKey || !fileName) return;
+			let code = '';
+			if (codeKey) {
+				code = codeByKey[codeKey] || '';
+			} else {
+				const pathSection = target.closest('.path-section');
+				code =
+					pathSection?.querySelector('code')?.textContent || '';
+			}
+			if (!code) return;
 
-				const code = codeByKey[codeKey];
-				if (!code) return;
-
-				const blob = new Blob([code], { type: 'text/plain' });
-				const url = URL.createObjectURL(blob);
-				const a = document.createElement('a');
-				a.href = url;
-				a.download = fileName;
-				a.click();
-				URL.revokeObjectURL(url);
-
-				const originalText = downloadBtn.textContent;
-				downloadBtn.textContent = 'Downloaded!';
+			navigator.clipboard.writeText(code).then(() => {
+				const originalText = target.textContent;
+				target.textContent = 'Copied!';
 				setTimeout(() => {
-					downloadBtn.textContent = originalText;
+					target.textContent = originalText;
 				}, 2000);
 			});
 		});
-
-		// Add click handlers to copy buttons
-		const copyBtns = output.querySelectorAll('.copy-btn');
-		copyBtns.forEach(btn => {
-			btn.addEventListener('click', e => {
-				const target = e.currentTarget as HTMLButtonElement;
-				const codeKey = target.dataset.codeKey;
-
-				let code = '';
-				if (codeKey) {
-					code = codeByKey[codeKey] || '';
-				} else {
-					const pathSection = target.closest('.path-section');
-					code =
-						pathSection?.querySelector('code')?.textContent || '';
-				}
-				if (!code) return;
-
-				navigator.clipboard.writeText(code).then(() => {
-					const originalText = target.textContent;
-					target.textContent = 'Copied!';
-					setTimeout(() => {
-						target.textContent = originalText;
-					}, 2000);
-				});
-			});
-		});
-	};
-
-	reader.readAsText(file);
+	});
 }
 
 function setupShapeNavigation(): () => void {

@@ -741,6 +741,7 @@ ${pointsSection}${drawSection}}`;
 export function generateDrawAllPaths(
 	functionNames: string[],
 	options: GeneratorOptions,
+	drawFunctionName = 'drawAllPaths',
 ): string {
 	const { vectorFormat, language, instanceMode = false } = options;
 	const isTS = language === 'typescript';
@@ -762,7 +763,7 @@ export function generateDrawAllPaths(
 		.join('\n');
 
 	if (isProcessing) {
-		return `\nvoid drawAllPaths() {\n${pathCalls}\n}`;
+		return `\nvoid ${drawFunctionName}() {\n${pathCalls}\n}`;
 	} else {
 		const returnType = isTS ? ': void' : '';
 		const params =
@@ -770,7 +771,7 @@ export function generateDrawAllPaths(
 				isTS ? 'p: any'
 				:	'p'
 			:	'';
-		return `\nfunction drawAllPaths(${params})${returnType} {\n${pathCalls}\n}`;
+		return `\nfunction ${drawFunctionName}(${params})${returnType} {\n${pathCalls}\n}`;
 	}
 }
 
