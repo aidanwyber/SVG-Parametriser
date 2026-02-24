@@ -12,16 +12,41 @@ import { extractDrawableShapes } from './svgElements';
 
 const dropZone = document.getElementById('dropZone') as HTMLElement;
 const fileInput = document.getElementById('fileInput') as HTMLInputElement;
+const functionPrefixInput = document.getElementById(
+	'functionPrefix',
+) as HTMLInputElement;
 const output = document.getElementById('output') as HTMLElement;
 
 let lastProcessedFile: File | null = null;
 let cleanupShapeNavigation: (() => void) | null = null;
 
-function toFunctionName(shapeName: string): string {
-	const sanitized = shapeName.replace(/[^a-zA-Z0-9_]/g, '_');
-	if (sanitized.length === 0) return 'shape';
-	if (/^[a-zA-Z_]/.test(sanitized)) return sanitized;
-	return `shape_${sanitized}`;
+function getFileStem(fileName: string): string {
+	const extensionIndex = fileName.lastIndexOf('.');
+	if (extensionIndex <= 0) {
+		return fileName;
+	}
+	return fileName.slice(0, extensionIndex);
+}
+
+function sanitizeIdentifierPrefix(prefix: string): string {
+	const collapsed = prefix
+		.trim()
+		.replace(/[^a-zA-Z0-9_]/g, '_')
+		.replace(/_+/g, '_')
+		.replace(/^_+|_+$/g, '');
+
+	if (collapsed.length === 0) return 'shape';
+	if (/^[a-zA-Z_]/.test(collapsed)) return collapsed;
+	return `shape_${collapsed}`;
+}
+
+function getFunctionName(prefix: string, shapeId: number): string {
+	return `${prefix}_path${shapeId}`;
+}
+
+function defaultFunctionPrefix(file: File): string {
+	const stem = getFileStem(file.name).trim();
+	return stem.length > 0 ? stem : 'shape';
 }
 
 // Click to browse
@@ -72,6 +97,14 @@ document.querySelectorAll('#coordMultiplier, #precision').forEach(input => {
 	});
 });
 
+if (functionPrefixInput) {
+	functionPrefixInput.addEventListener('input', () => {
+		if (lastProcessedFile) {
+			processSVG(lastProcessedFile);
+		}
+	});
+}
+
 // Drag and drop handlers
 dropZone.addEventListener('dragover', e => {
 	e.preventDefault();
@@ -106,6 +139,10 @@ fileInput.addEventListener('change', e => {
  * Process uploaded SVG file and generate p5.js code
  */
 function processSVG(file: File) {
+	if (functionPrefixInput && file !== lastProcessedFile) {
+		functionPrefixInput.value = defaultFunctionPrefix(file);
+	}
+
 	lastProcessedFile = file;
 	const reader = new FileReader();
 
@@ -174,6 +211,11 @@ function processSVG(file: File) {
 					'input[name="sortMode"]:checked',
 				) as HTMLInputElement
 			)?.value as 'primitive' | 'svg') || 'primitive';
+		const rawPrefix =
+			functionPrefixInput?.value ?? defaultFunctionPrefix(file);
+		const functionPrefix = sanitizeIdentifierPrefix(
+			rawPrefix.length > 0 ? rawPrefix : defaultFunctionPrefix(file),
+		);
 
 		const options: GeneratorOptions = {
 			vectorFormat,
@@ -196,7 +238,7 @@ function processSVG(file: File) {
 			shapeMetaByRef.set(shape, {
 				id,
 				name,
-				functionName: toFunctionName(name),
+				functionName: getFunctionName(functionPrefix, id),
 			});
 		});
 
@@ -267,42 +309,71 @@ function processSVG(file: File) {
         `;
 		});
 
-		// Add drawAllPaths function to shared code
 		const drawAllPathsFunction = generateDrawAllPaths(
 			functionNames,
 			options,
-		);
-		const completeSharedCode = sharedCode + drawAllPathsFunction;
+		).trim();
+		const sharedTransformCode = sharedCode.trim();
+		const shapeFunctionsCode = pathCodes.join('\n\n').trim();
+		const drawingCode = [drawAllPathsFunction, shapeFunctionsCode]
+			.filter(section => section.length > 0)
+			.join('\n\n');
+		const fullCode = [sharedTransformCode, drawingCode]
+			.filter(section => section.length > 0)
+			.join('\n\n');
 
-		// Generate downloadable file
+		const codeByKey: Record<string, string> = {
+			complete: fullCode,
+			drawing: drawingCode,
+			shared: sharedTransformCode,
+		};
+
 		const fileExtension =
 			vectorFormat === 'Processing' ? 'pde'
 			: language === 'typescript' ? 'ts'
 			: 'js';
-		const fileName = `draw-paths.${fileExtension}`;
-		const fullCode = `${completeSharedCode}\n\n${pathCodes.join('\n\n')}`;
+		const completeFileName = `draw-paths.${fileExtension}`;
+		const drawingFileName = `draw-paths-drawing.${fileExtension}`;
+		const sharedFileName = `draw-paths-shared.${fileExtension}`;
 
-		const downloadBlock = `
+		const exportBlock = `
       <div class="command-section">
         <div class="command-header">
-          <h2>Download Complete File</h2>
-          <button class="download-btn" data-filename="${fileName}">Download ${fileName}</button>
+          <h2>Complete File</h2>
+          <div class="action-buttons">
+            <button class="copy-btn" data-code-key="complete">Copy Complete Code</button>
+            <button class="download-btn" data-code-key="complete" data-filename="${completeFileName}">Download ${completeFileName}</button>
+          </div>
         </div>
         <div class="command-content">
-          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Click the button above to download a file containing all the shared code and shape functions.</p>
+          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Includes shared transform code and all generated drawing functions.</p>
+        </div>
+      </div>
+      <div class="command-section">
+        <div class="command-header">
+          <h2>Drawing Code Only</h2>
+          <div class="action-buttons">
+            <button class="copy-btn" data-code-key="drawing">Copy Drawing Code</button>
+            <button class="download-btn" data-code-key="drawing" data-filename="${drawingFileName}">Download ${drawingFileName}</button>
+          </div>
+        </div>
+        <div class="command-content">
+          <p style="margin: 0; padding: 15px; color: #9cdcfe;">Includes draw calls and shape functions without the shared transform section.</p>
         </div>
       </div>
     `;
 
-		// Add shared code block at the top
 		const sharedCodeBlock = `
       <div class="shared-code-section">
         <div class="shared-code-header">
           <h2>Shared Code</h2>
-          <button class="copy-btn" data-shared="true">Copy Shared Code</button>
+          <div class="action-buttons">
+            <button class="copy-btn" data-code-key="shared">Copy Shared Code</button>
+            <button class="download-btn" data-code-key="shared" data-filename="${sharedFileName}">Download ${sharedFileName}</button>
+          </div>
         </div>
         <div class="shared-code-content">
-          <pre><code>${escapeHtml(completeSharedCode)}</code></pre>
+          <pre><code>${escapeHtml(sharedTransformCode)}</code></pre>
         </div>
       </div>
     `;
@@ -337,32 +408,10 @@ function processSVG(file: File) {
 
 		output.innerHTML =
 			navigationBlock +
-			downloadBlock +
+			exportBlock +
 			sharedCodeBlock +
 			combinedPreviewBlock +
 			html;
-
-		// Add download functionality
-		const downloadBtn = output.querySelector(
-			'.download-btn',
-		) as HTMLButtonElement;
-		if (downloadBtn) {
-			downloadBtn.addEventListener('click', () => {
-				const blob = new Blob([fullCode], { type: 'text/plain' });
-				const url = URL.createObjectURL(blob);
-				const a = document.createElement('a');
-				a.href = url;
-				a.download = fileName;
-				a.click();
-				URL.revokeObjectURL(url);
-
-				const originalText = downloadBtn.textContent;
-				downloadBtn.textContent = 'Downloaded!';
-				setTimeout(() => {
-					downloadBtn.textContent = originalText;
-				}, 2000);
-			});
-		}
 
 		// Create previews after DOM is updated
 		createCombinedPreview(
@@ -383,25 +432,50 @@ function processSVG(file: File) {
 
 		cleanupShapeNavigation = setupShapeNavigation();
 
+		const downloadBtns = output.querySelectorAll(
+			'.download-btn[data-code-key]',
+		) as NodeListOf<HTMLButtonElement>;
+		downloadBtns.forEach(downloadBtn => {
+			downloadBtn.addEventListener('click', () => {
+				const codeKey = downloadBtn.dataset.codeKey;
+				const fileName = downloadBtn.dataset.filename;
+				if (!codeKey || !fileName) return;
+
+				const code = codeByKey[codeKey];
+				if (!code) return;
+
+				const blob = new Blob([code], { type: 'text/plain' });
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = fileName;
+				a.click();
+				URL.revokeObjectURL(url);
+
+				const originalText = downloadBtn.textContent;
+				downloadBtn.textContent = 'Downloaded!';
+				setTimeout(() => {
+					downloadBtn.textContent = originalText;
+				}, 2000);
+			});
+		});
+
 		// Add click handlers to copy buttons
 		const copyBtns = output.querySelectorAll('.copy-btn');
 		copyBtns.forEach(btn => {
 			btn.addEventListener('click', e => {
-				const target = e.target as HTMLElement;
-				const isShared = target.dataset.shared === 'true';
+				const target = e.currentTarget as HTMLButtonElement;
+				const codeKey = target.dataset.codeKey;
 
 				let code = '';
-				if (isShared) {
-					const sharedSection = target.closest(
-						'.shared-code-section',
-					);
-					code =
-						sharedSection?.querySelector('code')?.textContent || '';
+				if (codeKey) {
+					code = codeByKey[codeKey] || '';
 				} else {
 					const pathSection = target.closest('.path-section');
 					code =
 						pathSection?.querySelector('code')?.textContent || '';
 				}
+				if (!code) return;
 
 				navigator.clipboard.writeText(code).then(() => {
 					const originalText = target.textContent;

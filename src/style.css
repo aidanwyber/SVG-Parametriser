@@ -149,6 +149,8 @@ code {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
 	margin-bottom: 15px;
 }
 
@@ -181,6 +183,8 @@ code {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
 	margin-bottom: 15px;
 }
 
@@ -239,6 +243,8 @@ code {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
 	margin-bottom: 15px;
 }
 
@@ -285,7 +291,6 @@ code {
 	border-radius: 4px;
 	cursor: pointer;
 	font-size: 14px;
-	margin-top: 10px;
 	transition: background 0.2s;
 }
 
@@ -319,6 +324,13 @@ code {
 	border-left: 4px solid #569cd6;
 	margin-bottom: 20px;
 	font-size: 14px;
+}
+
+.action-buttons {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	justify-content: flex-end;
 }
 
 .options {
@@ -355,6 +367,22 @@ code {
 }
 
 .option-group input[type='number']:focus {
+	outline: none;
+	border-color: #569cd6;
+}
+
+.option-group input[type='text'] {
+	background: #1e1e1e;
+	border: 1px solid #3c3c3c;
+	color: #d4d4d4;
+	padding: 6px 10px;
+	border-radius: 4px;
+	font-size: 14px;
+	width: 100%;
+	max-width: 320px;
+}
+
+.option-group input[type='text']:focus {
 	outline: none;
 	border-color: #569cd6;
 }
