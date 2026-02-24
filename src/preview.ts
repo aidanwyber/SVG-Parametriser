@@ -132,11 +132,12 @@ function isSubpathInsideHost(
 	subpath: Subpath,
 	hostBounds: PathBounds,
 ): boolean {
+	const epsilon = 1e-6;
 	return (
-		subpath.bounds.minX >= hostBounds.minX &&
-		subpath.bounds.maxX <= hostBounds.maxX &&
-		subpath.bounds.minY >= hostBounds.minY &&
-		subpath.bounds.maxY <= hostBounds.maxY
+		subpath.bounds.minX >= hostBounds.minX - epsilon &&
+		subpath.bounds.maxX <= hostBounds.maxX + epsilon &&
+		subpath.bounds.minY >= hostBounds.minY - epsilon &&
+		subpath.bounds.maxY <= hostBounds.maxY + epsilon
 	);
 }
 
@@ -172,11 +173,13 @@ function drawPathWithContours(
 	if (subpaths.length === 0) return;
 
 	let currentShape: Subpath | null = null;
+	let currentShapeClosed = false;
 
 	const finishShape = () => {
 		if (!currentShape) return;
-		p.endShape(currentShape.closed ? p.CLOSE : p.OPEN);
+		p.endShape(currentShapeClosed ? p.CLOSE : p.OPEN);
 		currentShape = null;
+		currentShapeClosed = false;
 	};
 
 	subpaths.forEach(subpath => {
@@ -184,15 +187,16 @@ function drawPathWithContours(
 			p.beginShape();
 			drawSubpathCommands(p, subpath, transformPoint);
 			currentShape = subpath;
+			currentShapeClosed = subpath.closed;
 			return;
 		}
 
 		const shouldDrawAsContour =
-			currentShape.closed &&
-			subpath.closed &&
 			isSubpathInsideHost(subpath, currentShape.bounds);
 
 		if (shouldDrawAsContour) {
+			// Contours require the host to close; force close when we nest.
+			currentShapeClosed = true;
 			p.beginContour();
 			drawSubpathCommands(p, subpath, transformPoint);
 			p.endContour();
@@ -203,6 +207,7 @@ function drawPathWithContours(
 		p.beginShape();
 		drawSubpathCommands(p, subpath, transformPoint);
 		currentShape = subpath;
+		currentShapeClosed = subpath.closed;
 	});
 
 	finishShape();

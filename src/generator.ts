@@ -378,11 +378,12 @@ function isSubpathInsideHost(
 	subpath: Subpath,
 	hostBounds: PathBounds,
 ): boolean {
+	const epsilon = 1e-6;
 	return (
-		subpath.bounds.minX >= hostBounds.minX &&
-		subpath.bounds.maxX <= hostBounds.maxX &&
-		subpath.bounds.minY >= hostBounds.minY &&
-		subpath.bounds.maxY <= hostBounds.maxY
+		subpath.bounds.minX >= hostBounds.minX - epsilon &&
+		subpath.bounds.maxX <= hostBounds.maxX + epsilon &&
+		subpath.bounds.minY >= hostBounds.minY - epsilon &&
+		subpath.bounds.maxY <= hostBounds.maxY + epsilon
 	);
 }
 
@@ -693,12 +694,12 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 		}
 
 		const shouldAddContour =
-			currentShapeClosed &&
-			subpath.closed &&
 			currentHostBounds !== null &&
 			isSubpathInsideHost(subpath, currentHostBounds);
 
 		if (shouldAddContour) {
+			// Contours require the host to close; force close when we nest.
+			currentShapeClosed = true;
 			currentShapeLines.push(`${shapePrefix}beginContour();`);
 			currentShapeLines.push(...subpathLines);
 			currentShapeLines.push(`${shapePrefix}endContour();`);
