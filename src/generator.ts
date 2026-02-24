@@ -666,6 +666,7 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 	let currentShapeLines: string[] = [];
 	let currentShapeClosed = false;
 	let currentHostBounds: PathBounds | null = null;
+	let currentContourCount = 0;
 	const shapeBlocks: string[] = [];
 
 	const flushCurrentShape = () => {
@@ -680,6 +681,7 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 		currentShapeLines = [];
 		currentShapeClosed = false;
 		currentHostBounds = null;
+		currentContourCount = 0;
 	};
 
 	subpaths.forEach(subpath => {
@@ -690,6 +692,7 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 			currentShapeLines = subpathLines;
 			currentShapeClosed = subpath.closed;
 			currentHostBounds = subpath.bounds;
+			currentContourCount = 0;
 			return;
 		}
 
@@ -703,6 +706,34 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 			currentShapeLines.push(`${shapePrefix}beginContour();`);
 			currentShapeLines.push(...subpathLines);
 			currentShapeLines.push(`${shapePrefix}endContour();`);
+			currentContourCount++;
+			return;
+		}
+
+		const shouldSwapHostAndContour =
+			currentHostBounds !== null &&
+			currentContourCount === 0 &&
+			isSubpathInsideHost(
+				{
+					commands: [],
+					closed: false,
+					bounds: currentHostBounds,
+				},
+				subpath.bounds,
+			);
+
+		if (shouldSwapHostAndContour) {
+			// If the current host is inside the next subpath, use the larger one as host.
+			const previousHostLines = [...currentShapeLines];
+			currentShapeClosed = true;
+			currentHostBounds = subpath.bounds;
+			currentShapeLines = [
+				...subpathLines,
+				`${shapePrefix}beginContour();`,
+				...previousHostLines,
+				`${shapePrefix}endContour();`,
+			];
+			currentContourCount = 1;
 			return;
 		}
 
@@ -710,6 +741,7 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 		currentShapeLines = subpathLines;
 		currentShapeClosed = subpath.closed;
 		currentHostBounds = subpath.bounds;
+		currentContourCount = 0;
 	});
 
 	flushCurrentShape();

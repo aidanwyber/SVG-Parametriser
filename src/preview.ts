@@ -172,45 +172,76 @@ function drawPathWithContours(
 	);
 	if (subpaths.length === 0) return;
 
-	let currentShape: Subpath | null = null;
-	let currentShapeClosed = false;
+	interface ShapeGroup {
+		host: Subpath;
+		contours: Subpath[];
+		closed: boolean;
+	}
 
-	const finishShape = () => {
-		if (!currentShape) return;
-		p.endShape(currentShapeClosed ? p.CLOSE : p.OPEN);
-		currentShape = null;
-		currentShapeClosed = false;
+	const shapeGroups: ShapeGroup[] = [];
+	let currentGroup: ShapeGroup | null = null;
+
+	const finalizeCurrentGroup = () => {
+		if (!currentGroup) return;
+		shapeGroups.push(currentGroup);
+		currentGroup = null;
 	};
 
 	subpaths.forEach(subpath => {
-		if (!currentShape) {
-			p.beginShape();
-			drawSubpathCommands(p, subpath, transformPoint);
-			currentShape = subpath;
-			currentShapeClosed = subpath.closed;
+		if (!currentGroup) {
+			currentGroup = {
+				host: subpath,
+				contours: [],
+				closed: subpath.closed,
+			};
 			return;
 		}
 
-		const shouldDrawAsContour =
-			isSubpathInsideHost(subpath, currentShape.bounds);
+		const shouldDrawAsContour = isSubpathInsideHost(
+			subpath,
+			currentGroup.host.bounds,
+		);
 
 		if (shouldDrawAsContour) {
+			currentGroup.contours.push(subpath);
 			// Contours require the host to close; force close when we nest.
-			currentShapeClosed = true;
-			p.beginContour();
-			drawSubpathCommands(p, subpath, transformPoint);
-			p.endContour();
+			currentGroup.closed = true;
 			return;
 		}
 
-		finishShape();
-		p.beginShape();
-		drawSubpathCommands(p, subpath, transformPoint);
-		currentShape = subpath;
-		currentShapeClosed = subpath.closed;
+		const shouldSwapHostAndContour =
+			currentGroup.contours.length === 0 &&
+			isSubpathInsideHost(currentGroup.host, subpath.bounds);
+
+		if (shouldSwapHostAndContour) {
+			currentGroup = {
+				host: subpath,
+				contours: [currentGroup.host],
+				closed: true,
+			};
+			return;
+		}
+
+		finalizeCurrentGroup();
+		currentGroup = {
+			host: subpath,
+			contours: [],
+			closed: subpath.closed,
+		};
 	});
 
-	finishShape();
+	finalizeCurrentGroup();
+
+	shapeGroups.forEach(group => {
+		p.beginShape();
+		drawSubpathCommands(p, group.host, transformPoint);
+		group.contours.forEach(contour => {
+			p.beginContour();
+			drawSubpathCommands(p, contour, transformPoint);
+			p.endContour();
+		});
+		p.endShape(group.closed ? p.CLOSE : p.OPEN);
+	});
 }
 
 /**
