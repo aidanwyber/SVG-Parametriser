@@ -31,6 +31,183 @@ interface LabeledPoint {
 	label: string;
 }
 
+interface PathBounds {
+	minX: number;
+	minY: number;
+	maxX: number;
+	maxY: number;
+}
+
+interface Subpath {
+	commands: PathCommand[];
+	closed: boolean;
+	bounds: PathBounds;
+}
+
+function createBounds(): PathBounds {
+	return {
+		minX: Number.POSITIVE_INFINITY,
+		minY: Number.POSITIVE_INFINITY,
+		maxX: Number.NEGATIVE_INFINITY,
+		maxY: Number.NEGATIVE_INFINITY,
+	};
+}
+
+function includePoint(bounds: PathBounds, x: number, y: number): void {
+	bounds.minX = Math.min(bounds.minX, x);
+	bounds.minY = Math.min(bounds.minY, y);
+	bounds.maxX = Math.max(bounds.maxX, x);
+	bounds.maxY = Math.max(bounds.maxY, y);
+}
+
+function hasBounds(bounds: PathBounds): boolean {
+	return (
+		Number.isFinite(bounds.minX) &&
+		Number.isFinite(bounds.minY) &&
+		Number.isFinite(bounds.maxX) &&
+		Number.isFinite(bounds.maxY)
+	);
+}
+
+function splitCommandsIntoSubpaths(commands: PathCommand[]): Subpath[] {
+	const subpaths: Subpath[] = [];
+	let currentCommands: PathCommand[] = [];
+	let currentClosed = false;
+	let currentBounds = createBounds();
+
+	const finalizeSubpath = () => {
+		if (currentCommands.length === 0) return;
+		const bounds =
+			hasBounds(currentBounds) ?
+				{ ...currentBounds }
+			:	{ minX: 0, minY: 0, maxX: 0, maxY: 0 };
+		subpaths.push({
+			commands: currentCommands,
+			closed: currentClosed,
+			bounds,
+		});
+		currentCommands = [];
+		currentClosed = false;
+		currentBounds = createBounds();
+	};
+
+	commands.forEach(cmd => {
+		if (cmd.type === 'M') {
+			finalizeSubpath();
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'L') {
+			if (currentCommands.length === 0) {
+				currentCommands.push({ type: 'M', x: cmd.x, y: cmd.y });
+			}
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'C') {
+			if (currentCommands.length === 0) return;
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x1!, cmd.y1!);
+			includePoint(currentBounds, cmd.x2!, cmd.y2!);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'Z') {
+			currentClosed = true;
+			finalizeSubpath();
+		}
+	});
+
+	finalizeSubpath();
+
+	return subpaths;
+}
+
+function isSubpathInsideHost(
+	subpath: Subpath,
+	hostBounds: PathBounds,
+): boolean {
+	return (
+		subpath.bounds.minX >= hostBounds.minX &&
+		subpath.bounds.maxX <= hostBounds.maxX &&
+		subpath.bounds.minY >= hostBounds.minY &&
+		subpath.bounds.maxY <= hostBounds.maxY
+	);
+}
+
+function drawSubpathCommands(
+	p: any,
+	subpath: Subpath,
+	transformPoint: (x: number, y: number) => XY,
+): void {
+	subpath.commands.forEach(cmd => {
+		if (cmd.type === 'M' || cmd.type === 'L') {
+			const pt = transformPoint(cmd.x!, cmd.y!);
+			p.vertex(pt.x, pt.y);
+			return;
+		}
+
+		if (cmd.type === 'C') {
+			const cp1 = transformPoint(cmd.x1!, cmd.y1!);
+			const cp2 = transformPoint(cmd.x2!, cmd.y2!);
+			const end = transformPoint(cmd.x!, cmd.y!);
+			p.bezierVertex(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
+		}
+	});
+}
+
+function drawPathWithContours(
+	p: any,
+	commands: PathCommand[],
+	transformPoint: (x: number, y: number) => XY,
+): void {
+	const subpaths = splitCommandsIntoSubpaths(commands).filter(
+		subpath => subpath.commands.length > 0,
+	);
+	if (subpaths.length === 0) return;
+
+	let currentShape: Subpath | null = null;
+
+	const finishShape = () => {
+		if (!currentShape) return;
+		p.endShape(currentShape.closed ? p.CLOSE : p.OPEN);
+		currentShape = null;
+	};
+
+	subpaths.forEach(subpath => {
+		if (!currentShape) {
+			p.beginShape();
+			drawSubpathCommands(p, subpath, transformPoint);
+			currentShape = subpath;
+			return;
+		}
+
+		const shouldDrawAsContour =
+			currentShape.closed &&
+			subpath.closed &&
+			isSubpathInsideHost(subpath, currentShape.bounds);
+
+		if (shouldDrawAsContour) {
+			p.beginContour();
+			drawSubpathCommands(p, subpath, transformPoint);
+			p.endContour();
+			return;
+		}
+
+		finishShape();
+		p.beginShape();
+		drawSubpathCommands(p, subpath, transformPoint);
+		currentShape = subpath;
+	});
+
+	finishShape();
+}
+
 /**
  * Extract all points from path commands
  */
@@ -287,133 +464,118 @@ export function createPreview(
 			p.fill(100, 150, 255, 50);
 			p.stroke(100, 150, 255);
 			p.strokeWeight(2);
-			p.beginShape();
+			drawPathWithContours(p, commands, transformPoint);
 
-			commands.forEach(cmd => {
-				if (cmd.type === 'M') {
-					const pt = transformPoint(cmd.x!, cmd.y!);
-					p.vertex(pt.x, pt.y);
-				} else if (cmd.type === 'L') {
-					const pt = transformPoint(cmd.x!, cmd.y!);
-					p.vertex(pt.x, pt.y);
-				} else if (cmd.type === 'C') {
-					const cp1 = transformPoint(cmd.x1!, cmd.y1!);
-					const cp2 = transformPoint(cmd.x2!, cmd.y2!);
-					const end = transformPoint(cmd.x!, cmd.y!);
-					p.bezierVertex(cp1.x, cp1.y, cp2.x, cp2.y, end.x, end.y);
-				}
-			});
-			// Check if path ends with Z (close path) command
-			const hasClosePath =
-				commands.length > 0 &&
-				commands[commands.length - 1].type === 'Z';
-			p.endShape(hasClosePath ? p.CLOSE : p.OPEN);
+			if (isPrimitiveShape && primitivePoints.length > 0) {
+				// Primitives: show only relevant primitive points.
+				primitivePoints.forEach(({ point, label }) => {
+					const pt = transformPoint(point.x, point.y);
+					p.noStroke();
+					p.fill(255, 220, 120);
+					p.circle(pt.x, pt.y, 12);
 
-					if (isPrimitiveShape && primitivePoints.length > 0) {
-						// Primitives: show only relevant primitive points.
-						primitivePoints.forEach(({ point, label }) => {
-							const pt = transformPoint(point.x, point.y);
-							p.noStroke();
-							p.fill(255, 220, 120);
-							p.circle(pt.x, pt.y, 12);
+					p.fill(255);
+					p.textAlign(p.CENTER, p.CENTER);
+					p.textSize(12);
+					p.textStyle(p.BOLD);
+					p.text(label, pt.x, pt.y - 16);
 
-							p.fill(255);
-							p.textAlign(p.CENTER, p.CENTER);
-							p.textSize(12);
-							p.textStyle(p.BOLD);
-							p.text(label, pt.x, pt.y - 16);
+					if (showCoordinates) {
+						p.textSize(9);
+						p.textStyle(p.NORMAL);
+						p.fill(200);
+						p.text(
+							`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+							pt.x,
+							pt.y + 16,
+						);
+					}
+				});
+			} else {
+				// Draw control point lines
+				p.stroke(255, 200, 100, 100);
+				p.strokeWeight(1);
+				let pointIdx = 0;
+				commands.forEach(cmd => {
+					if (cmd.type === 'C') {
+						const prevPoint = points.find(
+							pt =>
+								pt.name ===
+								String.fromCharCode(65 + pointIdx - 1),
+						);
+						const cp1Point = points.find(
+							pt => pt.name === prevPoint?.name + 'c',
+						);
+						const cp2Point = points.find(
+							pt =>
+								pt.name ===
+								'c' + String.fromCharCode(65 + pointIdx),
+						);
+						const endPoint = points.find(
+							pt =>
+								pt.name === String.fromCharCode(65 + pointIdx),
+						);
 
-							if (showCoordinates) {
-								p.textSize(9);
-								p.textStyle(p.NORMAL);
-								p.fill(200);
-								p.text(
-									`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
-									pt.x,
-									pt.y + 16,
-								);
-							}
-						});
+						if (prevPoint && cp1Point) {
+							const pt1 = transformPoint(
+								prevPoint.x,
+								prevPoint.y,
+							);
+							const pt2 = transformPoint(cp1Point.x, cp1Point.y);
+							p.line(pt1.x, pt1.y, pt2.x, pt2.y);
+						}
+						if (cp2Point && endPoint) {
+							const pt1 = transformPoint(cp2Point.x, cp2Point.y);
+							const pt2 = transformPoint(endPoint.x, endPoint.y);
+							p.line(pt1.x, pt1.y, pt2.x, pt2.y);
+						}
+						pointIdx++;
+					} else if (cmd.type === 'M' || cmd.type === 'L') {
+						pointIdx++;
+					}
+				});
+
+				// Draw points and labels
+				points.forEach(point => {
+					const pt = transformPoint(point.x, point.y);
+
+					// Determine if it's a control point
+					const isControlPoint = point.name.includes('c');
+
+					// Draw point
+					p.noStroke();
+					if (isControlPoint) {
+						p.fill(255, 200, 100); // Orange for control points
+						p.circle(pt.x, pt.y, 8);
 					} else {
-					// Draw control point lines
-					p.stroke(255, 200, 100, 100);
-					p.strokeWeight(1);
-					let pointIdx = 0;
-					commands.forEach(cmd => {
-						if (cmd.type === 'C') {
-							const prevPoint = points.find(
-								pt =>
-									pt.name === String.fromCharCode(65 + pointIdx - 1),
-							);
-							const cp1Point = points.find(
-								pt => pt.name === prevPoint?.name + 'c',
-							);
-							const cp2Point = points.find(
-								pt =>
-									pt.name ===
-									'c' + String.fromCharCode(65 + pointIdx),
-							);
-							const endPoint = points.find(
-								pt => pt.name === String.fromCharCode(65 + pointIdx),
-							);
+						p.fill(100, 255, 150); // Green for main points
+						p.circle(pt.x, pt.y, 10);
+					}
 
-							if (prevPoint && cp1Point) {
-								const pt1 = transformPoint(prevPoint.x, prevPoint.y);
-								const pt2 = transformPoint(cp1Point.x, cp1Point.y);
-								p.line(pt1.x, pt1.y, pt2.x, pt2.y);
-							}
-							if (cp2Point && endPoint) {
-								const pt1 = transformPoint(cp2Point.x, cp2Point.y);
-								const pt2 = transformPoint(endPoint.x, endPoint.y);
-								p.line(pt1.x, pt1.y, pt2.x, pt2.y);
-							}
-							pointIdx++;
-						} else if (cmd.type === 'M' || cmd.type === 'L') {
-							pointIdx++;
-						}
-					});
+					// Draw label
+					p.fill(255);
+					p.noStroke();
+					p.textAlign(p.CENTER, p.CENTER);
+					p.textSize(12);
+					p.textStyle(p.BOLD);
 
-					// Draw points and labels
-					points.forEach(point => {
-						const pt = transformPoint(point.x, point.y);
+					// Position label slightly offset from point
+					const labelOffset = 15;
+					p.text(point.name, pt.x, pt.y - labelOffset);
 
-						// Determine if it's a control point
-						const isControlPoint = point.name.includes('c');
-
-						// Draw point
-						p.noStroke();
-						if (isControlPoint) {
-							p.fill(255, 200, 100); // Orange for control points
-							p.circle(pt.x, pt.y, 8);
-						} else {
-							p.fill(100, 255, 150); // Green for main points
-							p.circle(pt.x, pt.y, 10);
-						}
-
-						// Draw label
-						p.fill(255);
-						p.noStroke();
-						p.textAlign(p.CENTER, p.CENTER);
-						p.textSize(12);
-						p.textStyle(p.BOLD);
-
-						// Position label slightly offset from point
-						const labelOffset = 15;
-						p.text(point.name, pt.x, pt.y - labelOffset);
-
-						// Draw coordinate text
-						if (showCoordinates) {
-							p.textSize(9);
-							p.textStyle(p.NORMAL);
-							p.fill(200);
-							p.text(
-								`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
-								pt.x,
-								pt.y + labelOffset + 3,
-							);
-						}
-					});
-				}
+					// Draw coordinate text
+					if (showCoordinates) {
+						p.textSize(9);
+						p.textStyle(p.NORMAL);
+						p.fill(200);
+						p.text(
+							`(${point.x.toFixed(1)}, ${point.y.toFixed(1)})`,
+							pt.x,
+							pt.y + labelOffset + 3,
+						);
+					}
+				});
+			}
 
 			// Draw scale info
 			p.fill(200);
@@ -516,38 +678,7 @@ export function createCombinedPreview(
 				p.noFill();
 				p.stroke(color.stroke[0], color.stroke[1], color.stroke[2]);
 				p.strokeWeight(2);
-				p.beginShape();
-
-				let hasVertex = false;
-				commands.forEach(cmd => {
-					if (cmd.type === 'M' || cmd.type === 'L') {
-						const pt = transformPoint(cmd.x!, cmd.y!);
-						p.vertex(pt.x, pt.y);
-						hasVertex = true;
-					} else if (cmd.type === 'C') {
-						const cp1 = transformPoint(cmd.x1!, cmd.y1!);
-						const cp2 = transformPoint(cmd.x2!, cmd.y2!);
-						const end = transformPoint(cmd.x!, cmd.y!);
-						p.bezierVertex(
-							cp1.x,
-							cp1.y,
-							cp2.x,
-							cp2.y,
-							end.x,
-							end.y,
-						);
-						hasVertex = true;
-					}
-				});
-
-				if (hasVertex) {
-					const hasClosePath =
-						commands.length > 0 &&
-						commands[commands.length - 1].type === 'Z';
-					p.endShape(hasClosePath ? p.CLOSE : p.OPEN);
-				} else {
-					p.endShape(p.OPEN);
-				}
+				drawPathWithContours(p, commands, transformPoint);
 			});
 
 			// Label each path start with its numeric ID

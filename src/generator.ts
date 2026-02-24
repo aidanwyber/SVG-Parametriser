@@ -2,6 +2,7 @@ import type {
 	DrawableShape,
 	GeneratorOptions,
 	GeneratedCode,
+	PathCommand,
 	PrimitiveData,
 } from './types';
 import { parsePathData } from './parser';
@@ -276,6 +277,115 @@ function getShapePrefix(options: GeneratorOptions): string {
 	return isInstanceMode ? 'p.' : '';
 }
 
+interface PathBounds {
+	minX: number;
+	minY: number;
+	maxX: number;
+	maxY: number;
+}
+
+interface Subpath {
+	commands: PathCommand[];
+	closed: boolean;
+	bounds: PathBounds;
+}
+
+function createBounds(): PathBounds {
+	return {
+		minX: Number.POSITIVE_INFINITY,
+		minY: Number.POSITIVE_INFINITY,
+		maxX: Number.NEGATIVE_INFINITY,
+		maxY: Number.NEGATIVE_INFINITY,
+	};
+}
+
+function includePoint(bounds: PathBounds, x: number, y: number): void {
+	bounds.minX = Math.min(bounds.minX, x);
+	bounds.minY = Math.min(bounds.minY, y);
+	bounds.maxX = Math.max(bounds.maxX, x);
+	bounds.maxY = Math.max(bounds.maxY, y);
+}
+
+function hasBounds(bounds: PathBounds): boolean {
+	return (
+		Number.isFinite(bounds.minX) &&
+		Number.isFinite(bounds.minY) &&
+		Number.isFinite(bounds.maxX) &&
+		Number.isFinite(bounds.maxY)
+	);
+}
+
+function splitCommandsIntoSubpaths(commands: PathCommand[]): Subpath[] {
+	const subpaths: Subpath[] = [];
+	let currentCommands: PathCommand[] = [];
+	let currentClosed = false;
+	let currentBounds = createBounds();
+
+	const finalizeSubpath = () => {
+		if (currentCommands.length === 0) return;
+		const bounds =
+			hasBounds(currentBounds) ?
+				{ ...currentBounds }
+			:	{ minX: 0, minY: 0, maxX: 0, maxY: 0 };
+		subpaths.push({
+			commands: currentCommands,
+			closed: currentClosed,
+			bounds,
+		});
+		currentCommands = [];
+		currentClosed = false;
+		currentBounds = createBounds();
+	};
+
+	commands.forEach(cmd => {
+		if (cmd.type === 'M') {
+			finalizeSubpath();
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'L') {
+			if (currentCommands.length === 0) {
+				currentCommands.push({ type: 'M', x: cmd.x, y: cmd.y });
+			}
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'C') {
+			if (currentCommands.length === 0) return;
+			currentCommands.push(cmd);
+			includePoint(currentBounds, cmd.x1!, cmd.y1!);
+			includePoint(currentBounds, cmd.x2!, cmd.y2!);
+			includePoint(currentBounds, cmd.x!, cmd.y!);
+			return;
+		}
+
+		if (cmd.type === 'Z') {
+			currentClosed = true;
+			finalizeSubpath();
+		}
+	});
+
+	finalizeSubpath();
+
+	return subpaths;
+}
+
+function isSubpathInsideHost(
+	subpath: Subpath,
+	hostBounds: PathBounds,
+): boolean {
+	return (
+		subpath.bounds.minX >= hostBounds.minX &&
+		subpath.bounds.maxX <= hostBounds.maxX &&
+		subpath.bounds.minY >= hostBounds.minY &&
+		subpath.bounds.maxY <= hostBounds.maxY
+	);
+}
+
 function generatePrimitiveDrawLines(
 	primitive: PrimitiveData,
 	options: GeneratorOptions,
@@ -455,7 +565,6 @@ export function convertPathToP5(
 		: 'createVector';
 
 	const pointDeclarations: string[] = [];
-	const drawCalls: string[] = [];
 
 	const constKeyword =
 		isProcessing ?
@@ -500,72 +609,128 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 	}
 
 	const commands = parsePathData(pathData);
+	const subpaths = splitCommandsIntoSubpaths(commands);
 	let pointIndex = 0;
+	const getSubpathDrawLines = (subpath: Subpath): string[] => {
+		const lines: string[] = [];
 
-	// Check if path ends with Z (close path) command
-	const hasClosePath =
-		commands.length > 0 && commands[commands.length - 1].type === 'Z';
+		subpath.commands.forEach(cmd => {
+			if (cmd.type === 'M' || cmd.type === 'L') {
+				const pointName = getPointName(pointIndex);
+				const x = formatNumber(cmd.x!, coordMultiplier, precision);
+				const y = formatNumber(cmd.y!, coordMultiplier, precision);
+				pointDeclarations.push(
+					`${pointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
+				);
+				lines.push(
+					`${shapePrefix}vertex(${pointName}.x, ${pointName}.y);`,
+				);
+				pointIndex++;
+				return;
+			}
 
-	commands.forEach(cmd => {
-		if (cmd.type === 'M' || cmd.type === 'L') {
-			const pointName = getPointName(pointIndex);
-			const x = formatNumber(cmd.x!, coordMultiplier, precision);
-			const y = formatNumber(cmd.y!, coordMultiplier, precision);
-			pointDeclarations.push(
-				`${pointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
-			);
-			drawCalls.push(
-				`${shapePrefix}vertex(${pointName}.x, ${pointName}.y);`,
-			);
-			pointIndex++;
-		} else if (cmd.type === 'C') {
-			const prevPointName = getPointName(pointIndex - 1);
-			const nextPointName = getPointName(pointIndex);
-			const cp1Name = prevPointName + 'c';
-			const cp2Name = 'c' + nextPointName;
+			if (cmd.type === 'C') {
+				const prevPointName = getPointName(pointIndex - 1);
+				const nextPointName = getPointName(pointIndex);
+				const cp1Name = prevPointName + 'c';
+				const cp2Name = 'c' + nextPointName;
 
-			const x1 = formatNumber(cmd.x1!, coordMultiplier, precision);
-			const y1 = formatNumber(cmd.y1!, coordMultiplier, precision);
-			const x2 = formatNumber(cmd.x2!, coordMultiplier, precision);
-			const y2 = formatNumber(cmd.y2!, coordMultiplier, precision);
-			const x = formatNumber(cmd.x!, coordMultiplier, precision);
-			const y = formatNumber(cmd.y!, coordMultiplier, precision);
+				const x1 = formatNumber(cmd.x1!, coordMultiplier, precision);
+				const y1 = formatNumber(cmd.y1!, coordMultiplier, precision);
+				const x2 = formatNumber(cmd.x2!, coordMultiplier, precision);
+				const y2 = formatNumber(cmd.y2!, coordMultiplier, precision);
+				const x = formatNumber(cmd.x!, coordMultiplier, precision);
+				const y = formatNumber(cmd.y!, coordMultiplier, precision);
 
-			pointDeclarations.push(
-				`${cp1Name} = ${applyTransformCall}${vecConstructor}(${x1}, ${y1}))`,
-			);
-			pointDeclarations.push(
-				`${cp2Name} = ${applyTransformCall}${vecConstructor}(${x2}, ${y2}))`,
-			);
-			pointDeclarations.push(
-				`${nextPointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
-			);
+				pointDeclarations.push(
+					`${cp1Name} = ${applyTransformCall}${vecConstructor}(${x1}, ${y1}))`,
+				);
+				pointDeclarations.push(
+					`${cp2Name} = ${applyTransformCall}${vecConstructor}(${x2}, ${y2}))`,
+				);
+				pointDeclarations.push(
+					`${nextPointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
+				);
 
-			drawCalls.push(
-				`${shapePrefix}bezierVertex(${cp1Name}.x, ${cp1Name}.y, ${cp2Name}.x, ${cp2Name}.y, ${nextPointName}.x, ${nextPointName}.y);`,
-			);
-			pointIndex++;
+				lines.push(
+					`${shapePrefix}bezierVertex(${cp1Name}.x, ${cp1Name}.y, ${cp2Name}.x, ${cp2Name}.y, ${nextPointName}.x, ${nextPointName}.y);`,
+				);
+				pointIndex++;
+			}
+		});
+
+		return lines;
+	};
+
+	let currentShapeLines: string[] = [];
+	let currentShapeClosed = false;
+	let currentHostBounds: PathBounds | null = null;
+	const shapeBlocks: string[] = [];
+
+	const flushCurrentShape = () => {
+		if (currentShapeLines.length === 0) return;
+		shapeBlocks.push(
+			[
+				`${shapePrefix}beginShape();`,
+				...currentShapeLines,
+				`${shapePrefix}endShape(${currentShapeClosed ? 'CLOSE' : 'OPEN'});`,
+			].join('\n'),
+		);
+		currentShapeLines = [];
+		currentShapeClosed = false;
+		currentHostBounds = null;
+	};
+
+	subpaths.forEach(subpath => {
+		const subpathLines = getSubpathDrawLines(subpath);
+		if (subpathLines.length === 0) return;
+
+		if (currentShapeLines.length === 0) {
+			currentShapeLines = subpathLines;
+			currentShapeClosed = subpath.closed;
+			currentHostBounds = subpath.bounds;
+			return;
 		}
+
+		const shouldAddContour =
+			currentShapeClosed &&
+			subpath.closed &&
+			currentHostBounds !== null &&
+			isSubpathInsideHost(subpath, currentHostBounds);
+
+		if (shouldAddContour) {
+			currentShapeLines.push(`${shapePrefix}beginContour();`);
+			currentShapeLines.push(...subpathLines);
+			currentShapeLines.push(`${shapePrefix}endContour();`);
+			return;
+		}
+
+		flushCurrentShape();
+		currentShapeLines = subpathLines;
+		currentShapeClosed = subpath.closed;
+		currentHostBounds = subpath.bounds;
 	});
 
-	let indentedPoints: string;
-	let indentedDrawCalls: string;
+	flushCurrentShape();
 
-	if (isProcessing) {
-		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`;
-		indentedDrawCalls = drawCalls.map(call => `\t${call}`).join('\n');
-	} else {
-		indentedPoints = `\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`;
-		indentedDrawCalls = drawCalls.map(call => `\t${call}`).join('\n');
-	}
+	const indentedPoints =
+		pointDeclarations.length > 0 ?
+			`\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`
+		:	'';
+	const indentedDrawCalls = shapeBlocks
+		.map(block =>
+			block
+				.split('\n')
+				.map(line => `\t${line}`)
+				.join('\n'),
+		)
+		.join('\n\n');
+
+	const pointsSection = indentedPoints ? `${indentedPoints}\n\n` : '';
+	const drawSection = indentedDrawCalls ? `${indentedDrawCalls}\n` : '';
 
 	const pathCode = `${functionDeclaration}
-${indentedPoints}
-
-\t${shapePrefix}beginShape();
-${indentedDrawCalls}
-\t${shapePrefix}endShape(${hasClosePath ? 'CLOSE' : 'OPEN'});
-}`;
+${pointsSection}${drawSection}}`;
 
 	return { sharedCode, pathCode };
 }
