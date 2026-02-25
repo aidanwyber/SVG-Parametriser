@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120">
+	<title>Hand Typed Mixed Fixture</title>
+	<rect x="10" y="10" width="80" height="60" rx="8" />
+	<circle cx="160" cy="40" r="24" />
+	<ellipse cx="200" cy="80" rx="20" ry="12" />
+	<line x1="10" y1="90" x2="90" y2="110" />
+	<polyline points="100,90 120,110 140,90 160,110" />
+	<polygon points="170,15 200,15 215,35 185,50" />
+	<path d="M 30 30 h 20 v 20 h -20 z m 4 4 l 12 0 l 0 12 l -12 0 z" />
+	<path d="M 110 20 C 120 0 140 40 150 20 S 180 40 190 20 Q 200 10 210 20 T 230 20 A 10 10 0 0 1 230 40" />
+</svg>
