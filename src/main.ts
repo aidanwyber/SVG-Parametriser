@@ -124,7 +124,7 @@ function sanitizeDownloadStem(fileName: string, extension: string): string {
 			.replace(/_+/g, '_')
 			.replace(/^_+|_+$/g, '');
 		if (normalized.length === 0) return 'drawing';
-		return /^[0-9]/.test(normalized) ? `_${normalized}` : normalized;
+		return /^[0-9]/.test(normalized) ? `svg${normalized}` : normalized;
 	}
 
 	const normalized = stem
@@ -141,14 +141,90 @@ function createDownloadFileName(baseName: string, extension: string): string {
 			.replace(/_+/g, '_')
 			.replace(/^_+|_+$/g, '');
 		const nonEmpty = normalized.length > 0 ? normalized : 'drawing';
-		const safe = /^[0-9]/.test(nonEmpty) ? `_${nonEmpty}` : nonEmpty;
+		const safe = /^[0-9]/.test(nonEmpty) ? `svg${nonEmpty}` : nonEmpty;
 		return `${safe}.pde`;
 	}
 	return `${baseName}.${extension}`;
 }
 
+async function copyToClipboard(text: string): Promise<boolean> {
+	if (!text) return false;
+
+	if (
+		typeof navigator !== 'undefined' &&
+		navigator.clipboard &&
+		typeof navigator.clipboard.writeText === 'function'
+	) {
+		try {
+			await navigator.clipboard.writeText(text);
+			return true;
+		} catch {
+			// Fall back to execCommand path below.
+		}
+	}
+
+	// Fallback for older browsers or if Clipboard API fails
+	const textArea = document.createElement('textarea');
+	textArea.value = text;
+	textArea.setAttribute('readonly', '');
+	textArea.style.position = 'fixed';
+	textArea.style.top = '0';
+	textArea.style.left = '-9999px';
+	textArea.style.opacity = '0';
+	textArea.style.pointerEvents = 'none';
+	document.body.appendChild(textArea);
+	textArea.focus();
+	textArea.select();
+	textArea.setSelectionRange(0, textArea.value.length);
+
+	let success = false;
+	try {
+		success = document.execCommand('copy');
+	} catch {
+		success = false;
+	}
+
+	document.body.removeChild(textArea);
+	return success;
+}
+
+const copyButtonResetTimers = new WeakMap<HTMLButtonElement, number>();
+
+function getButtonBaseLabel(button: HTMLButtonElement): string {
+	const existing = button.dataset.baseLabel;
+	if (existing !== undefined) {
+		return existing;
+	}
+
+	const baseLabel = button.textContent || '';
+	button.dataset.baseLabel = baseLabel;
+	return baseLabel;
+}
+
+function showTemporaryButtonLabel(
+	button: HTMLButtonElement,
+	label: string,
+	durationMs = 2000,
+): void {
+	const baseLabel = getButtonBaseLabel(button);
+	const pendingTimer = copyButtonResetTimers.get(button);
+	if (pendingTimer !== undefined) {
+		window.clearTimeout(pendingTimer);
+	}
+
+	button.textContent = label;
+	const timeoutId = window.setTimeout(() => {
+		button.textContent = baseLabel;
+		copyButtonResetTimers.delete(button);
+	}, durationMs);
+	copyButtonResetTimers.set(button, timeoutId);
+}
+
 function isSvgFile(file: File): boolean {
-	return file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg');
+	return (
+		file.type === 'image/svg+xml' ||
+		file.name.toLowerCase().endsWith('.svg')
+	);
 }
 
 function getSvgFiles(fileList: FileList | File[]): File[] {
@@ -314,7 +390,9 @@ async function processSVGFiles(files: File[]): Promise<void> {
 		cleanupShapeNavigation = null;
 	}
 
-	const parsedWithShapes = parsedFiles.filter(fileData => fileData.shapes.length > 0);
+	const parsedWithShapes = parsedFiles.filter(
+		fileData => fileData.shapes.length > 0,
+	);
 	if (parsedWithShapes.length === 0) {
 		output.innerHTML =
 			'<div class="output"><p>No supported drawable elements found (path, line, polyline, polygon, rect, circle, ellipse).</p></div>';
@@ -344,8 +422,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 
 	const precision =
 		parseInt(
-			(document.getElementById('precision') as HTMLInputElement)
-				?.value,
+			(document.getElementById('precision') as HTMLInputElement)?.value,
 		) || 5;
 
 	const processingVector =
@@ -379,20 +456,22 @@ async function processSVGFiles(files: File[]): Promise<void> {
 	};
 
 	const singlePrefix = sanitizeIdentifierPrefix(
-		functionPrefixInput?.value || defaultFunctionPrefix(parsedWithShapes[0].file),
+		functionPrefixInput?.value ||
+			defaultFunctionPrefix(parsedWithShapes[0].file),
 	);
 	const filePrefixes =
 		isMultiFile ?
 			makeUniquePrefixes(
 				parsedWithShapes.map(fileData =>
-					sanitizeIdentifierPrefix(defaultFunctionPrefix(fileData.file)),
+					sanitizeIdentifierPrefix(
+						defaultFunctionPrefix(fileData.file),
+					),
 				),
 			)
 		:	[singlePrefix];
 
 	const fileGroups: FileGroup[] = parsedWithShapes.map((fileData, index) => {
-		const filePrefix =
-			isMultiFile ? filePrefixes[index] : singlePrefix;
+		const filePrefix = isMultiFile ? filePrefixes[index] : singlePrefix;
 		return {
 			file: fileData.file,
 			fileIndex: fileData.fileIndex,
@@ -442,7 +521,8 @@ async function processSVGFiles(files: File[]): Promise<void> {
 	const orderedFunctionNames = sortedEntries.map(entry => entry.functionName);
 	const orderedFunctionNamesByFile = new Map<number, string[]>();
 	sortedEntries.forEach(entry => {
-		const namesForFile = orderedFunctionNamesByFile.get(entry.fileIndex) || [];
+		const namesForFile =
+			orderedFunctionNamesByFile.get(entry.fileIndex) || [];
 		namesForFile.push(entry.functionName);
 		orderedFunctionNamesByFile.set(entry.fileIndex, namesForFile);
 	});
@@ -553,6 +633,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 		topLevelDrawAllCode = generateDrawAllPaths(
 			orderedFunctionNames,
 			options,
+			fileGroups[0].drawAllFunctionName,
 		).trim();
 	}
 
@@ -572,17 +653,11 @@ async function processSVGFiles(files: File[]): Promise<void> {
 		: language === 'typescript' ? 'ts'
 		: 'js';
 	const completeFileName = createDownloadFileName(
-		'draw-paths',
+		'svg_complete',
 		fileExtension,
 	);
-	const drawingFileName = createDownloadFileName(
-		'draw-paths-drawing',
-		fileExtension,
-	);
-	const sharedFileName = createDownloadFileName(
-		'draw-paths-shared',
-		fileExtension,
-	);
+	const drawingFileName = createDownloadFileName('svg_paths', fileExtension);
+	const sharedFileName = createDownloadFileName('svg_shared', fileExtension);
 
 	const perFileDrawingDownloads: FileDrawingDownload[] = [];
 	if (isMultiFile) {
@@ -597,7 +672,10 @@ async function processSVGFiles(files: File[]): Promise<void> {
 				group.drawAllFunctionName,
 			).trim();
 			const filePathCode = fileFunctionNames
-				.map(functionName => pathCodeByFunctionName.get(functionName) || '')
+				.map(
+					functionName =>
+						pathCodeByFunctionName.get(functionName) || '',
+				)
 				.filter(section => section.length > 0)
 				.join('\n\n')
 				.trim();
@@ -610,7 +688,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 				code: fileDrawingCode,
 				drawAllFunctionName: group.drawAllFunctionName,
 				fileName: createDownloadFileName(
-					`${sanitizeDownloadStem(group.file.name, fileExtension)}${fileExtension === 'pde' ? '_' : '-'}drawing`,
+					`svg_${sanitizeDownloadStem(group.file.name, fileExtension)}`,
 					fileExtension,
 				),
 				sourceFileName: group.file.name,
@@ -668,8 +746,8 @@ async function processSVGFiles(files: File[]): Promise<void> {
           <div class="command-content-inner">
             <div class="per-file-actions">
 	              ${perFileDrawingDownloads
-								.map(
-									entry => `
+						.map(
+							entry => `
 	                <div class="per-file-action-row">
 	                  <div class="per-file-action-label">${escapeHtml(entry.sourceFileName)}</div>
 	                  <div class="action-buttons action-buttons-start">
@@ -678,8 +756,8 @@ async function processSVGFiles(files: File[]): Promise<void> {
 	                  </div>
 	                </div>
 	              `,
-								)
-								.join('')}
+						)
+						.join('')}
             </div>
           </div>
         </div>
@@ -711,13 +789,13 @@ async function processSVGFiles(files: File[]): Promise<void> {
         </div>
         <div class="combined-preview-grid">
           ${fileGroups
-						.map(group => {
-							const previewData = previewDataByFile.get(group.fileIndex);
-							if (!previewData || previewData.pathsData.length === 0) {
-								return '';
-							}
+				.map(group => {
+					const previewData = previewDataByFile.get(group.fileIndex);
+					if (!previewData || previewData.pathsData.length === 0) {
+						return '';
+					}
 
-							return `
+					return `
             <div class="combined-preview-file">
               <h3>${escapeHtml(previewData.fileName)}</h3>
               <div class="preview-container">
@@ -725,8 +803,8 @@ async function processSVGFiles(files: File[]): Promise<void> {
               </div>
             </div>
           `;
-						})
-						.join('')}
+				})
+				.join('')}
         </div>
       </div>
     `
@@ -746,14 +824,14 @@ async function processSVGFiles(files: File[]): Promise<void> {
         <h3>Shapes</h3>
         <ul class="shape-nav-list">
           ${navigationFunctionNames
-						.map(
-							(functionName, index) => `
+				.map(
+					(functionName, index) => `
             <li>
               <button class="shape-nav-link" data-target="shape-section-${index}">${escapeHtml(functionName)}</button>
             </li>
           `,
-						)
-						.join('')}
+				)
+				.join('')}
         </ul>
       </div>
     `;
@@ -833,8 +911,9 @@ async function processSVGFiles(files: File[]): Promise<void> {
 	// Add click handlers to copy buttons
 	const copyBtns = output.querySelectorAll('.copy-btn');
 	copyBtns.forEach(btn => {
-		btn.addEventListener('click', e => {
+		btn.addEventListener('click', async e => {
 			const target = e.currentTarget as HTMLButtonElement;
+			if (target.dataset.copying === '1') return;
 			const codeKey = target.dataset.codeKey;
 
 			let code = '';
@@ -842,18 +921,24 @@ async function processSVGFiles(files: File[]): Promise<void> {
 				code = codeByKey[codeKey] || '';
 			} else {
 				const pathSection = target.closest('.path-section');
-				code =
-					pathSection?.querySelector('code')?.textContent || '';
+				code = pathSection?.querySelector('code')?.textContent || '';
 			}
-			if (!code) return;
+			if (!code) {
+				showTemporaryButtonLabel(target, 'No code');
+				return;
+			}
 
-			navigator.clipboard.writeText(code).then(() => {
-				const originalText = target.textContent;
-				target.textContent = 'Copied!';
-				setTimeout(() => {
-					target.textContent = originalText;
-				}, 2000);
-			});
+			target.dataset.copying = '1';
+			let copied = false;
+			try {
+				copied = await copyToClipboard(code);
+			} finally {
+				target.dataset.copying = '0';
+			}
+			showTemporaryButtonLabel(
+				target,
+				copied ? 'Copied!' : 'Copy failed',
+			);
 		});
 	});
 }
