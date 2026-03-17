@@ -528,7 +528,7 @@ function generatePrimitiveDrawLines(
 		if (points.length < 2) return null;
 
 		points.forEach(([x, y], index) => {
-			addPointAssignment(`p${index}`, x, y);
+			addPointAssignment(getPointName(index), x, y);
 		});
 
 		drawCalls.push(`${shapePrefix}beginShape();`);

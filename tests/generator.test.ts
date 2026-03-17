@@ -39,4 +39,58 @@ describe('convertPathToP5', () => {
 			'p.vertex(drawPath1_B.x, drawPath1_B.y);',
 		);
 	});
+
+	it('uses capital letter point names for polygon primitives', () => {
+		const options: GeneratorOptions = {
+			vectorFormat: 'createVector',
+			language: 'javascript',
+			coordMultiplier: 1,
+			precision: 0,
+			instanceMode: true,
+		};
+
+		const generated = convertPathToP5(
+			'M0 0 L10 0 L10 10 Z',
+			options,
+			0,
+			{
+				pathData: 'M0 0 L10 0 L10 10 Z',
+				sourceIndex: 1,
+				primitive: {
+					kind: 'polygon',
+					points: [
+						[0, 0],
+						[10, 0],
+						[10, 10],
+					],
+				},
+			},
+			'drawPoly',
+		);
+
+		expect(generated.globalCode).toContain('let drawPoly_A;');
+		expect(generated.globalCode).toContain('let drawPoly_B;');
+		expect(generated.globalCode).toContain('let drawPoly_C;');
+		expect(generated.pathCode).toContain(
+			'drawPoly_A = applyTransform(p, p.createVector(0, 0));',
+		);
+		expect(generated.pathCode).toContain(
+			'drawPoly_B = applyTransform(p, p.createVector(10, 0));',
+		);
+		expect(generated.pathCode).toContain(
+			'drawPoly_C = applyTransform(p, p.createVector(10, 10));',
+		);
+		expect(generated.pathCode).toContain(
+			'drawPolyPoints = [drawPoly_A, drawPoly_B, drawPoly_C];',
+		);
+		expect(generated.pathCode).toContain(
+			'p.vertex(drawPoly_A.x, drawPoly_A.y);',
+		);
+		expect(generated.pathCode).toContain(
+			'p.vertex(drawPoly_B.x, drawPoly_B.y);',
+		);
+		expect(generated.pathCode).toContain(
+			'p.vertex(drawPoly_C.x, drawPoly_C.y);',
+		);
+	});
 });

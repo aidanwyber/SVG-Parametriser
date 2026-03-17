@@ -31,6 +31,10 @@ interface LabeledPoint {
 	label: string;
 }
 
+interface PreviewPoint extends LabeledPoint {
+	isControlPoint?: boolean;
+}
+
 interface PathBounds {
 	minX: number;
 	minY: number;
@@ -394,7 +398,7 @@ function primitiveReferenceLabel(primitive?: PrimitiveData): string {
 	return 'center';
 }
 
-function primitivePreviewPoints(primitive?: PrimitiveData): LabeledPoint[] {
+function primitivePreviewPoints(primitive?: PrimitiveData): PreviewPoint[] {
 	if (!primitive) return [];
 
 	if (primitive.kind === 'line') {
@@ -410,6 +414,13 @@ function primitivePreviewPoints(primitive?: PrimitiveData): LabeledPoint[] {
 			{ point: { x: primitive.x1, y: primitive.y1 }, label: 'start' },
 			{ point: { x: primitive.x2, y: primitive.y2 }, label: 'end' },
 		];
+	}
+
+	if (primitive.kind === 'polyline' || primitive.kind === 'polygon') {
+		return (primitive.points || []).map(([x, y], index) => ({
+			point: { x, y },
+			label: getPointName(index),
+		}));
 	}
 
 	const centroid = primitiveCentroid(primitive);
@@ -504,11 +515,16 @@ export function createPreview(
 
 			if (isPrimitiveShape && primitivePoints.length > 0) {
 				// Primitives: show only relevant primitive points.
-				primitivePoints.forEach(({ point, label }) => {
+				primitivePoints.forEach(({ point, label, isControlPoint }) => {
 					const pt = transformPoint(point.x, point.y);
 					p.noStroke();
-					p.fill(255, 220, 120);
-					p.circle(pt.x, pt.y, 12);
+					if (isControlPoint) {
+						p.fill(255, 200, 100);
+						p.circle(pt.x, pt.y, 8);
+					} else {
+						p.fill(100, 255, 150);
+						p.circle(pt.x, pt.y, 10);
+					}
 
 					p.fill(255);
 					p.textAlign(p.CENTER, p.CENTER);
