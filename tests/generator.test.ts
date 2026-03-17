@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { convertPathToP5 } from '../src/generator';
+import { convertPathToP5, generateSharedCode } from '../src/generator';
 import type { GeneratorOptions } from '../src/types';
 
 describe('convertPathToP5', () => {
@@ -91,5 +91,36 @@ describe('convertPathToP5', () => {
 		expect(generated.pathCode).toContain(
 			'p.vertex(drawPoly_C.x, drawPoly_C.y);',
 		);
+	});
+
+	it('includes source bounds globals and commented centering lines in shared code', () => {
+		const options: GeneratorOptions = {
+			vectorFormat: 'createVector',
+			language: 'javascript',
+			coordMultiplier: 1,
+			precision: 0,
+			instanceMode: true,
+		};
+
+		const sharedCode = generateSharedCode(options, {
+			minX: 10,
+			minY: 20,
+			maxX: 110,
+			maxY: 220,
+			width: 100,
+			height: 200,
+			centerX: 60,
+			centerY: 120,
+		});
+
+		expect(sharedCode).toContain('const fileMinX = 10,');
+		expect(sharedCode).toContain('fileMinY = 20,');
+		expect(sharedCode).toContain('fileCenterX = 60,');
+		expect(sharedCode).toContain('fileCenterY = 120;');
+		expect(sharedCode).toContain(
+			'// Uncomment to center around the source file bounds.',
+		);
+		expect(sharedCode).toContain('// x -= fileCenterX;');
+		expect(sharedCode).toContain('// y -= fileCenterY;');
 	});
 });

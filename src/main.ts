@@ -5,8 +5,15 @@ import type {
 	DrawableShape,
 	GeneratorOptions,
 	ProcessingVector,
+	SourceBounds,
 } from './types';
-import { convertPathToP5, escapeHtml, generateDrawAllPaths } from './generator';
+import {
+	convertPathToP5,
+	escapeHtml,
+	generateDrawAllPaths,
+	generateSharedCode,
+} from './generator';
+import { parsePathData } from './parser';
 import { createCombinedPreview, createPreview } from './preview';
 import { extractDrawableShapes } from './svgElements';
 
@@ -229,6 +236,56 @@ function isSvgFile(file: File): boolean {
 
 function getSvgFiles(fileList: FileList | File[]): File[] {
 	return Array.from(fileList).filter(isSvgFile);
+}
+
+function computeSourceBounds(shapes: DrawableShape[]): SourceBounds | null {
+	let minX = Number.POSITIVE_INFINITY;
+	let minY = Number.POSITIVE_INFINITY;
+	let maxX = Number.NEGATIVE_INFINITY;
+	let maxY = Number.NEGATIVE_INFINITY;
+
+	const includePoint = (x: number, y: number) => {
+		minX = Math.min(minX, x);
+		minY = Math.min(minY, y);
+		maxX = Math.max(maxX, x);
+		maxY = Math.max(maxY, y);
+	};
+
+	shapes.forEach(shape => {
+		const commands = parsePathData(shape.pathData);
+		commands.forEach(command => {
+			if (command.type === 'M' || command.type === 'L') {
+				includePoint(command.x!, command.y!);
+				return;
+			}
+
+			if (command.type === 'C') {
+				includePoint(command.x1!, command.y1!);
+				includePoint(command.x2!, command.y2!);
+				includePoint(command.x!, command.y!);
+			}
+		});
+	});
+
+	if (
+		!Number.isFinite(minX) ||
+		!Number.isFinite(minY) ||
+		!Number.isFinite(maxX) ||
+		!Number.isFinite(maxY)
+	) {
+		return null;
+	}
+
+	return {
+		minX,
+		minY,
+		maxX,
+		maxY,
+		width: maxX - minX,
+		height: maxY - minY,
+		centerX: (minX + maxX) / 2,
+		centerY: (minY + maxY) / 2,
+	};
 }
 
 // Click to browse
@@ -527,7 +584,10 @@ async function processSVGFiles(files: File[]): Promise<void> {
 		orderedFunctionNamesByFile.set(entry.fileIndex, namesForFile);
 	});
 
-	let sharedCode = '';
+	const sourceBounds =
+		computeSourceBounds(sortedEntries.map(entry => entry.shape)) ||
+		undefined;
+	const sharedCode = generateSharedCode(options, sourceBounds);
 	let html = '';
 	const pathsData: string[] = [];
 	const shapeIds: number[] = [];
@@ -573,11 +633,6 @@ async function processSVGFiles(files: File[]): Promise<void> {
 			entry.shape,
 			entry.functionName,
 		);
-
-		// Use shared code from first shape
-		if (index === 0) {
-			sharedCode = generated.sharedCode;
-		}
 
 		const shapeBlock = [generated.globalCode, generated.pathCode]
 			.filter(section => section.trim().length > 0)

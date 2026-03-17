@@ -4,6 +4,7 @@ import type {
 	GeneratedCode,
 	PathCommand,
 	PrimitiveData,
+	SourceBounds,
 } from './types';
 import { parsePathData } from './parser';
 import { getPointName } from './utils';
@@ -24,7 +25,55 @@ function formatNumber(
 /**
  * Generate transform setup code
  */
-function generateTransformSetup(options: GeneratorOptions): string {
+function generateBoundsSetup(
+	options: GeneratorOptions,
+	sourceBounds?: SourceBounds,
+): string {
+	if (!sourceBounds) return '';
+
+	const { vectorFormat, language, coordMultiplier, precision } = options;
+	const f = (value: number) =>
+		formatNumber(value, coordMultiplier, precision);
+
+	if (vectorFormat === 'Processing') {
+		return `// Source file bounds from generated vertices
+float fileMinX = ${f(sourceBounds.minX)};
+float fileMinY = ${f(sourceBounds.minY)};
+float fileMaxX = ${f(sourceBounds.maxX)};
+float fileMaxY = ${f(sourceBounds.maxY)};
+float fileWidth = ${f(sourceBounds.width)};
+float fileHeight = ${f(sourceBounds.height)};
+float fileCenterX = ${f(sourceBounds.centerX)};
+float fileCenterY = ${f(sourceBounds.centerY)};`;
+	}
+
+	const typeAnnotation = language === 'typescript' ? ': number' : '';
+	return `// Source file bounds from generated vertices
+const fileMinX${typeAnnotation} = ${f(sourceBounds.minX)},
+	fileMinY${typeAnnotation} = ${f(sourceBounds.minY)},
+	fileMaxX${typeAnnotation} = ${f(sourceBounds.maxX)},
+	fileMaxY${typeAnnotation} = ${f(sourceBounds.maxY)},
+	fileWidth${typeAnnotation} = ${f(sourceBounds.width)},
+	fileHeight${typeAnnotation} = ${f(sourceBounds.height)},
+	fileCenterX${typeAnnotation} = ${f(sourceBounds.centerX)},
+	fileCenterY${typeAnnotation} = ${f(sourceBounds.centerY)};`;
+}
+
+function generateTransformCenteringComment(): string {
+	return `\t// Uncomment to center around the source file bounds.
+\t// x -= fileCenterX;
+\t// y -= fileCenterY;`;
+}
+
+function generateVecTransformCenteringComment(): string {
+	return `\t// Uncomment to center around the source file bounds.
+\t// const [x, y] = transform.transform(v.x - fileCenterX, v.y - fileCenterY);`;
+}
+
+function generateTransformSetup(
+	options: GeneratorOptions,
+	sourceBounds?: SourceBounds,
+): string {
 	const {
 		vectorFormat,
 		language,
@@ -39,8 +88,10 @@ function generateTransformSetup(options: GeneratorOptions): string {
 	if (isProcessing) {
 		const vecType = isVec2D ? 'Vec2D' : 'PVector';
 		const importStatement = isVec2D ? 'import toxi.geom.*;\n\n' : '';
+		const boundsBlock = generateBoundsSetup(options, sourceBounds);
+		const centeringComment = generateTransformCenteringComment();
 
-		return `${importStatement}// Transform configuration
+		return `${importStatement}${boundsBlock ? boundsBlock + '\n\n' : ''}// Transform configuration
 class TransformConfig {
 	float preTranslateX = 0;
 	float preTranslateY = 0;
@@ -56,6 +107,8 @@ TransformConfig transformConfig = new TransformConfig();
 ${vecType} applyTransform(${vecType} v) {
 	float x = v.x + transformConfig.preTranslateX;
 	float y = v.y + transformConfig.preTranslateY;
+
+${centeringComment}
 
 	x *= transformConfig.scaleX;
 	y *= transformConfig.scaleY;
@@ -91,6 +144,8 @@ float applyTransformScalar(float value, char axis) {
 	}
 
 	if (vectorFormat === 'Vec') {
+		const boundsBlock = generateBoundsSetup(options, sourceBounds);
+		const centeringComment = generateVecTransformCenteringComment();
 		const configType =
 			isTS ?
 				`: {
@@ -104,7 +159,7 @@ float applyTransformScalar(float value, char axis) {
 }`
 			:	'';
 
-		return `// Transform configuration
+		return `${boundsBlock ? boundsBlock + '\n\n' : ''}// Transform configuration
 const transformConfig${configType} = {
 	preTranslateX: 0,
 	preTranslateY: 0,
@@ -159,6 +214,7 @@ class Matrix2D {
 const transform = Matrix2D.fromTransform(transformConfig);
 
 function applyTransform(v${isTS ? ': Vec' : ''})${isTS ? ': Vec' : ''} {
+${centeringComment}
 	const [x, y] = transform.transform(v.x, v.y);
 	return new Vec(x, y);
 }
@@ -184,8 +240,10 @@ function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
 			isTS ? 'p: any'
 			:	'p'
 		:	'';
+	const boundsBlock = generateBoundsSetup(options, sourceBounds);
+	const centeringComment = generateTransformCenteringComment();
 
-	return `// Transform configuration
+	return `${boundsBlock ? boundsBlock + '\n\n' : ''}// Transform configuration
 const transformConfig${
 		isTS ?
 			`: {
@@ -213,6 +271,8 @@ function applyTransform(${pParam ? pParam + ', ' : ''}v${
 	})${isTS ? `: ${vecType}` : ''} {
 	let x = v.x + transformConfig.preTranslateX;
 	let y = v.y + transformConfig.preTranslateY;
+
+${centeringComment}
 
 	x *= transformConfig.scaleX;
 	y *= transformConfig.scaleY;
@@ -243,6 +303,13 @@ function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
 	}
 	return value * ((Math.abs(transformConfig.scaleX) + Math.abs(transformConfig.scaleY)) * 0.5);
 }`;
+}
+
+export function generateSharedCode(
+	options: GeneratorOptions,
+	sourceBounds?: SourceBounds,
+): string {
+	return generateTransformSetup(options, sourceBounds);
 }
 
 function getFunctionDeclaration(

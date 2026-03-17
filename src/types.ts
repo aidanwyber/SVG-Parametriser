@@ -59,6 +59,17 @@ export interface GeneratedCode {
 	pathCode: string;
 }
 
+export interface SourceBounds {
+	minX: number;
+	minY: number;
+	maxX: number;
+	maxY: number;
+	width: number;
+	height: number;
+	centerX: number;
+	centerY: number;
+}
+
 export interface TransformConfig {
 	scaleX: number;
 	scaleY: number;
