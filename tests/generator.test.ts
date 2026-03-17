@@ -20,8 +20,7 @@ describe('convertPathToP5', () => {
 			'drawPath1',
 		);
 
-		expect(generated.globalCode).toContain('let drawPath1_A;');
-		expect(generated.globalCode).toContain('let drawPath1_B;');
+		expect(generated.globalCode).toContain('let drawPath1_A, drawPath1_B;');
 		expect(generated.globalCode).toContain('let drawPath1Points = [];');
 		expect(generated.pathCode).toContain(
 			'drawPath1_A = applyTransform(p, p.createVector(10, 20));',
@@ -68,9 +67,9 @@ describe('convertPathToP5', () => {
 			'drawPoly',
 		);
 
-		expect(generated.globalCode).toContain('let drawPoly_A;');
-		expect(generated.globalCode).toContain('let drawPoly_B;');
-		expect(generated.globalCode).toContain('let drawPoly_C;');
+		expect(generated.globalCode).toContain(
+			'let drawPoly_A, drawPoly_B, drawPoly_C;',
+		);
 		expect(generated.pathCode).toContain(
 			'drawPoly_A = applyTransform(p, p.createVector(0, 0));',
 		);

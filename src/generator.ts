@@ -303,7 +303,9 @@ function formatGlobalPointDeclarations(
 
 	const typeAnnotation =
 		options.language === 'typescript' ? `: ${getVectorType(options)}` : '';
-	return pointNames.map(name => `let ${name}${typeAnnotation};`);
+	return [
+		`let ${pointNames.map(name => `${name}${typeAnnotation}`).join(', ')};`,
+	];
 }
 
 function formatPointArrayDeclaration(
