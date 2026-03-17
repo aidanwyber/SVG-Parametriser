@@ -31,25 +31,25 @@ describe('parsePathData', () => {
 	});
 
 	it('parses repeated cubic bezier segments in one C command', () => {
-		expect(
-			parsePathData('M0 0 C10 0 10 10 20 10 30 10 30 0 40 0'),
-		).toEqual([
-			{ type: 'M', x: 0, y: 0 },
-			{ type: 'C', x1: 10, y1: 0, x2: 10, y2: 10, x: 20, y: 10 },
-			{ type: 'C', x1: 30, y1: 10, x2: 30, y2: 0, x: 40, y: 0 },
-		]);
+		expect(parsePathData('M0 0 C10 0 10 10 20 10 30 10 30 0 40 0')).toEqual(
+			[
+				{ type: 'M', x: 0, y: 0 },
+				{ type: 'C', x1: 10, y1: 0, x2: 10, y2: 10, x: 20, y: 10 },
+				{ type: 'C', x1: 30, y1: 10, x2: 30, y2: 0, x: 40, y: 0 },
+			],
+		);
 	});
 
 	it('converts smooth cubic S to reflected cubic C after C/S', () => {
 		// SVG 2 paths: S command reflects the previous cubic control point.
 		// https://www.w3.org/TR/SVG2/paths.html#PathDataCubicBezierCommands
-		expect(
-			parsePathData('M 0 0 C 10 0 10 10 20 10 S 30 20 40 10'),
-		).toEqual([
-			{ type: 'M', x: 0, y: 0 },
-			{ type: 'C', x1: 10, y1: 0, x2: 10, y2: 10, x: 20, y: 10 },
-			{ type: 'C', x1: 30, y1: 10, x2: 30, y2: 20, x: 40, y: 10 },
-		]);
+		expect(parsePathData('M 0 0 C 10 0 10 10 20 10 S 30 20 40 10')).toEqual(
+			[
+				{ type: 'M', x: 0, y: 0 },
+				{ type: 'C', x1: 10, y1: 0, x2: 10, y2: 10, x: 20, y: 10 },
+				{ type: 'C', x1: 30, y1: 10, x2: 30, y2: 20, x: 40, y: 10 },
+			],
+		);
 	});
 
 	it('uses current point as first control point for S after non-cubic commands', () => {

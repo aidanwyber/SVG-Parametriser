@@ -65,22 +65,20 @@ describe('SVG fixtures integration', () => {
 		},
 	] as const;
 
-	downloadedFixtures.forEach(
-		({ file, metadataPattern, minShapeCount }) => {
-			it(`parses downloaded fixture: ${file}`, () => {
-				const svg = readFixture(file);
-				expect(svg).toMatch(metadataPattern);
+	downloadedFixtures.forEach(({ file, metadataPattern, minShapeCount }) => {
+		it(`parses downloaded fixture: ${file}`, () => {
+			const svg = readFixture(file);
+			expect(svg).toMatch(metadataPattern);
 
-				const shapes = extractDrawableShapes(parseSvg(svg));
-				expect(shapes.length).toBeGreaterThanOrEqual(minShapeCount);
+			const shapes = extractDrawableShapes(parseSvg(svg));
+			expect(shapes.length).toBeGreaterThanOrEqual(minShapeCount);
 
-				// Validate parser robustness for many real-world paths.
-				shapes.slice(0, 250).forEach(shape => {
-					const commands = parsePathData(shape.pathData);
-					expect(commands.length).toBeGreaterThan(0);
-					expect(commands[0]?.type).toBe('M');
-				});
+			// Validate parser robustness for many real-world paths.
+			shapes.slice(0, 250).forEach(shape => {
+				const commands = parsePathData(shape.pathData);
+				expect(commands.length).toBeGreaterThan(0);
+				expect(commands[0]?.type).toBe('M');
 			});
-		},
-	);
+		});
+	});
 });
