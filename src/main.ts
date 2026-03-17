@@ -542,8 +542,8 @@ async function processSVGFiles(files: File[]): Promise<void> {
 			shapes: DrawableShape[];
 		}
 	>();
-	const pathCodesOrdered: string[] = [];
-	const pathCodeByFunctionName = new Map<string, string>();
+	const shapeBlocksOrdered: string[] = [];
+	const shapeBlockByFunctionName = new Map<string, string>();
 	const navigationFunctionNames: string[] = [];
 
 	sortedEntries.forEach((entry, index) => {
@@ -579,9 +579,13 @@ async function processSVGFiles(files: File[]): Promise<void> {
 			sharedCode = generated.sharedCode;
 		}
 
+		const shapeBlock = [generated.globalCode, generated.pathCode]
+			.filter(section => section.trim().length > 0)
+			.join('\n\n');
+
 		// Collect shape code
-		pathCodesOrdered.push(generated.pathCode);
-		pathCodeByFunctionName.set(entry.functionName, generated.pathCode);
+		shapeBlocksOrdered.push(shapeBlock);
+		shapeBlockByFunctionName.set(entry.functionName, shapeBlock);
 
 		const previewId = `preview-${index}`;
 		html += `
@@ -596,7 +600,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
                 <div id="${previewId}"></div>
               </div>
               <div class="code-container">
-                <pre><code>${escapeHtml(generated.pathCode)}</code></pre>
+                <pre><code>${escapeHtml(shapeBlock)}</code></pre>
               </div>
             </div>
           </div>
@@ -604,7 +608,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 	});
 
 	const sharedTransformCode = sharedCode.trim();
-	const shapeFunctionsCode = pathCodesOrdered.join('\n\n').trim();
+	const shapeFunctionsCode = shapeBlocksOrdered.join('\n\n').trim();
 
 	const perFileDrawAllCodes: string[] = [];
 	let topLevelDrawAllCode = '';
@@ -674,7 +678,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 			const filePathCode = fileFunctionNames
 				.map(
 					functionName =>
-						pathCodeByFunctionName.get(functionName) || '',
+						shapeBlockByFunctionName.get(functionName) || '',
 				)
 				.filter(section => section.length > 0)
 				.join('\n\n')

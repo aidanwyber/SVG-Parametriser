@@ -277,6 +277,66 @@ function getShapePrefix(options: GeneratorOptions): string {
 	return isInstanceMode ? 'p.' : '';
 }
 
+function getVectorType(options: GeneratorOptions): string {
+	const { vectorFormat, processingVector = 'PVector', language } = options;
+
+	if (vectorFormat === 'Processing') {
+		return processingVector === 'Vec2D' ? 'Vec2D' : 'PVector';
+	}
+
+	if (vectorFormat === 'Vec') {
+		return 'Vec';
+	}
+
+	return language === 'typescript' ? 'p5.Vector' : '';
+}
+
+function formatGlobalPointDeclarations(
+	pointNames: string[],
+	options: GeneratorOptions,
+): string[] {
+	if (pointNames.length === 0) return [];
+
+	if (options.vectorFormat === 'Processing') {
+		return [`${getVectorType(options)} ${pointNames.join(', ')};`];
+	}
+
+	const typeAnnotation =
+		options.language === 'typescript' ? `: ${getVectorType(options)}` : '';
+	return pointNames.map(name => `let ${name}${typeAnnotation};`);
+}
+
+function formatPointArrayDeclaration(
+	arrayName: string,
+	options: GeneratorOptions,
+): string {
+	if (options.vectorFormat === 'Processing') {
+		return `${getVectorType(options)}[] ${arrayName} = new ${getVectorType(options)}[0];`;
+	}
+
+	if (options.language === 'typescript') {
+		return `let ${arrayName}: ${getVectorType(options)}[] = [];`;
+	}
+
+	return `let ${arrayName} = [];`;
+}
+
+function formatPointArrayAssignment(
+	arrayName: string,
+	pointNames: string[],
+	options: GeneratorOptions,
+): string {
+	if (options.vectorFormat === 'Processing') {
+		return `${arrayName} = new ${getVectorType(options)}[] { ${pointNames.join(', ')} };`;
+	}
+
+	return `${arrayName} = [${pointNames.join(', ')}];`;
+}
+
+function indentLines(lines: string[]): string {
+	return lines.map(line => `\t${line}`).join('\n');
+}
+
 interface PathBounds {
 	minX: number;
 	minY: number;
@@ -392,27 +452,34 @@ function generatePrimitiveDrawLines(
 	options: GeneratorOptions,
 	coordMultiplier: number,
 	precision: number,
-	vecType: string,
 	vecConstructor: string,
 	applyTransformCall: string,
-): { declarations: string[]; drawCalls: string[] } | null {
+	globalPrefix: string,
+	pointArrayName: string,
+): {
+	globalCode: string;
+	assignments: string[];
+	localDeclarations: string[];
+	drawCalls: string[];
+} | null {
 	const isProcessing = options.vectorFormat === 'Processing';
 	const shapePrefix = getShapePrefix(options);
 	const f = (value: number) =>
 		formatNumber(value, coordMultiplier, precision);
-	const declarations: string[] = [];
+	const pointAssignments: string[] = [];
+	const pointNames: string[] = [];
+	const localDeclarations: string[] = [];
 	const drawCalls: string[] = [];
 	const axisX = "'x'";
 	const axisY = "'y'";
 	const axisAvg = isProcessing ? "'a'" : "'avg'";
 
-	const addPointDeclaration = (name: string, x: number, y: number) => {
+	const addPointAssignment = (name: string, x: number, y: number) => {
+		const scopedName = `${globalPrefix}_${name}`;
 		const valueExpr = `${applyTransformCall}${vecConstructor}(${f(x)}, ${f(y)}))`;
-		if (isProcessing) {
-			declarations.push(`${vecType} ${name} = ${valueExpr};`);
-		} else {
-			declarations.push(`const ${name} = ${valueExpr};`);
-		}
+		pointNames.push(scopedName);
+		pointAssignments.push(`${scopedName} = ${valueExpr};`);
+		return scopedName;
 	};
 
 	const addScalarDeclaration = (
@@ -422,9 +489,9 @@ function generatePrimitiveDrawLines(
 	) => {
 		const valueExpr = `applyTransformScalar(${f(value)}, ${axis})`;
 		if (isProcessing) {
-			declarations.push(`float ${name} = ${valueExpr};`);
+			localDeclarations.push(`float ${name} = ${valueExpr};`);
 		} else {
-			declarations.push(`const ${name} = ${valueExpr};`);
+			localDeclarations.push(`const ${name} = ${valueExpr};`);
 		}
 	};
 
@@ -437,10 +504,23 @@ function generatePrimitiveDrawLines(
 		) {
 			return null;
 		}
-		addPointDeclaration('p1', primitive.x1, primitive.y1);
-		addPointDeclaration('p2', primitive.x2, primitive.y2);
-		drawCalls.push(`${shapePrefix}line(p1.x, p1.y, p2.x, p2.y);`);
-		return { declarations, drawCalls };
+		const p1 = addPointAssignment('p1', primitive.x1, primitive.y1);
+		const p2 = addPointAssignment('p2', primitive.x2, primitive.y2);
+		drawCalls.push(
+			`${shapePrefix}line(${p1}.x, ${p1}.y, ${p2}.x, ${p2}.y);`,
+		);
+		return {
+			globalCode: [
+				...formatGlobalPointDeclarations(pointNames, options),
+				formatPointArrayDeclaration(pointArrayName, options),
+			].join('\n'),
+			assignments: [
+				...pointAssignments,
+				formatPointArrayAssignment(pointArrayName, pointNames, options),
+			],
+			localDeclarations,
+			drawCalls,
+		};
 	}
 
 	if (primitive.kind === 'polyline' || primitive.kind === 'polygon') {
@@ -448,17 +528,30 @@ function generatePrimitiveDrawLines(
 		if (points.length < 2) return null;
 
 		points.forEach(([x, y], index) => {
-			addPointDeclaration(`p${index}`, x, y);
+			addPointAssignment(`p${index}`, x, y);
 		});
 
 		drawCalls.push(`${shapePrefix}beginShape();`);
-		points.forEach((_, index) => {
-			drawCalls.push(`${shapePrefix}vertex(p${index}.x, p${index}.y);`);
+		pointNames.forEach(pointName => {
+			drawCalls.push(
+				`${shapePrefix}vertex(${pointName}.x, ${pointName}.y);`,
+			);
 		});
 		drawCalls.push(
 			`${shapePrefix}endShape(${primitive.kind === 'polygon' ? 'CLOSE' : 'OPEN'});`,
 		);
-		return { declarations, drawCalls };
+		return {
+			globalCode: [
+				...formatGlobalPointDeclarations(pointNames, options),
+				formatPointArrayDeclaration(pointArrayName, options),
+			].join('\n'),
+			assignments: [
+				...pointAssignments,
+				formatPointArrayAssignment(pointArrayName, pointNames, options),
+			],
+			localDeclarations,
+			drawCalls,
+		};
 	}
 
 	if (primitive.kind === 'rect') {
@@ -471,7 +564,7 @@ function generatePrimitiveDrawLines(
 			return null;
 		}
 
-		addPointDeclaration('rectPos', primitive.x, primitive.y);
+		const rectPos = addPointAssignment('rectPos', primitive.x, primitive.y);
 		addScalarDeclaration('rectW', primitive.width, axisX);
 		addScalarDeclaration('rectH', primitive.height, axisY);
 
@@ -484,15 +577,26 @@ function generatePrimitiveDrawLines(
 			}
 			addScalarDeclaration('rectR', rx, axisAvg);
 			drawCalls.push(
-				`${shapePrefix}rect(rectPos.x, rectPos.y, rectW, rectH, rectR);`,
+				`${shapePrefix}rect(${rectPos}.x, ${rectPos}.y, rectW, rectH, rectR);`,
 			);
 		} else {
 			drawCalls.push(
-				`${shapePrefix}rect(rectPos.x, rectPos.y, rectW, rectH);`,
+				`${shapePrefix}rect(${rectPos}.x, ${rectPos}.y, rectW, rectH);`,
 			);
 		}
 
-		return { declarations, drawCalls };
+		return {
+			globalCode: [
+				...formatGlobalPointDeclarations(pointNames, options),
+				formatPointArrayDeclaration(pointArrayName, options),
+			].join('\n'),
+			assignments: [
+				...pointAssignments,
+				formatPointArrayAssignment(pointArrayName, pointNames, options),
+			],
+			localDeclarations,
+			drawCalls,
+		};
 	}
 
 	if (primitive.kind === 'circle') {
@@ -503,12 +607,27 @@ function generatePrimitiveDrawLines(
 		) {
 			return null;
 		}
-		addPointDeclaration('circleCenter', primitive.cx, primitive.cy);
+		const circleCenter = addPointAssignment(
+			'circleCenter',
+			primitive.cx,
+			primitive.cy,
+		);
 		addScalarDeclaration('circleDiameter', primitive.r * 2, axisAvg);
 		drawCalls.push(
-			`${shapePrefix}circle(circleCenter.x, circleCenter.y, circleDiameter);`,
+			`${shapePrefix}circle(${circleCenter}.x, ${circleCenter}.y, circleDiameter);`,
 		);
-		return { declarations, drawCalls };
+		return {
+			globalCode: [
+				...formatGlobalPointDeclarations(pointNames, options),
+				formatPointArrayDeclaration(pointArrayName, options),
+			].join('\n'),
+			assignments: [
+				...pointAssignments,
+				formatPointArrayAssignment(pointArrayName, pointNames, options),
+			],
+			localDeclarations,
+			drawCalls,
+		};
 	}
 
 	if (primitive.kind === 'ellipse') {
@@ -520,13 +639,28 @@ function generatePrimitiveDrawLines(
 		) {
 			return null;
 		}
-		addPointDeclaration('ellipseCenter', primitive.cx, primitive.cy);
+		const ellipseCenter = addPointAssignment(
+			'ellipseCenter',
+			primitive.cx,
+			primitive.cy,
+		);
 		addScalarDeclaration('ellipseW', primitive.rx * 2, axisX);
 		addScalarDeclaration('ellipseH', primitive.ry * 2, axisY);
 		drawCalls.push(
-			`${shapePrefix}ellipse(ellipseCenter.x, ellipseCenter.y, ellipseW, ellipseH);`,
+			`${shapePrefix}ellipse(${ellipseCenter}.x, ${ellipseCenter}.y, ellipseW, ellipseH);`,
 		);
-		return { declarations, drawCalls };
+		return {
+			globalCode: [
+				...formatGlobalPointDeclarations(pointNames, options),
+				formatPointArrayDeclaration(pointArrayName, options),
+			].join('\n'),
+			assignments: [
+				...pointAssignments,
+				formatPointArrayAssignment(pointArrayName, pointNames, options),
+			],
+			localDeclarations,
+			drawCalls,
+		};
 	}
 
 	return null;
@@ -565,13 +699,6 @@ export function convertPathToP5(
 		: instanceMode && vectorFormat === 'createVector' ? 'p.createVector'
 		: 'createVector';
 
-	const pointDeclarations: string[] = [];
-
-	const constKeyword =
-		isProcessing ?
-			isVec2D ? 'Vec2D'
-			:	'PVector'
-		:	'const';
 	// Only pass p to applyTransform for createVector in instance mode, not for Vec
 	const applyTransformCall =
 		isInstanceMode && vectorFormat === 'createVector' ?
@@ -580,6 +707,7 @@ export function convertPathToP5(
 	const sharedCode = generateTransformSetup(options);
 	const functionDeclaration = getFunctionDeclaration(functionName, options);
 	const shapePrefix = getShapePrefix(options);
+	const pointArrayName = `${functionName}Points`;
 
 	if (shape?.primitive) {
 		const primitiveCode = generatePrimitiveDrawLines(
@@ -587,41 +715,46 @@ export function convertPathToP5(
 			options,
 			coordMultiplier,
 			precision,
-			constKeyword,
 			vecConstructor,
 			applyTransformCall,
+			functionName,
+			pointArrayName,
 		);
 
 		if (primitiveCode) {
-			const primitiveDeclarations =
-				primitiveCode.declarations.length > 0 ?
-					`${primitiveCode.declarations
-						.map(line => `\t${line}`)
-						.join('\n')}\n\n`
-				:	'';
-			const primitiveDrawCalls = primitiveCode.drawCalls
-				.map(line => `\t${line}`)
-				.join('\n');
+			const functionLines = [
+				...primitiveCode.assignments,
+				...primitiveCode.localDeclarations,
+				...primitiveCode.drawCalls,
+			];
 			const pathCode = `${functionDeclaration}
-${primitiveDeclarations}${primitiveDrawCalls}
+${indentLines(functionLines)}
 }`;
-			return { sharedCode, pathCode };
+			return {
+				sharedCode,
+				globalCode: primitiveCode.globalCode,
+				pathCode,
+			};
 		}
 	}
 
 	const commands = parsePathData(pathData);
 	const subpaths = splitCommandsIntoSubpaths(commands);
 	let pointIndex = 0;
+	const pointNames: string[] = [];
+	const pointAssignments: string[] = [];
+
 	const getSubpathDrawLines = (subpath: Subpath): string[] => {
 		const lines: string[] = [];
 
 		subpath.commands.forEach(cmd => {
 			if (cmd.type === 'M' || cmd.type === 'L') {
-				const pointName = getPointName(pointIndex);
+				const pointName = `${functionName}_${getPointName(pointIndex)}`;
 				const x = formatNumber(cmd.x!, coordMultiplier, precision);
 				const y = formatNumber(cmd.y!, coordMultiplier, precision);
-				pointDeclarations.push(
-					`${pointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
+				pointNames.push(pointName);
+				pointAssignments.push(
+					`${pointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}));`,
 				);
 				lines.push(
 					`${shapePrefix}vertex(${pointName}.x, ${pointName}.y);`,
@@ -631,8 +764,8 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 			}
 
 			if (cmd.type === 'C') {
-				const prevPointName = getPointName(pointIndex - 1);
-				const nextPointName = getPointName(pointIndex);
+				const prevPointName = `${functionName}_${getPointName(pointIndex - 1)}`;
+				const nextPointName = `${functionName}_${getPointName(pointIndex)}`;
 				const cp1Name = prevPointName + 'c';
 				const cp2Name = 'c' + nextPointName;
 
@@ -643,14 +776,15 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 				const x = formatNumber(cmd.x!, coordMultiplier, precision);
 				const y = formatNumber(cmd.y!, coordMultiplier, precision);
 
-				pointDeclarations.push(
-					`${cp1Name} = ${applyTransformCall}${vecConstructor}(${x1}, ${y1}))`,
+				pointNames.push(cp1Name, cp2Name, nextPointName);
+				pointAssignments.push(
+					`${cp1Name} = ${applyTransformCall}${vecConstructor}(${x1}, ${y1}));`,
 				);
-				pointDeclarations.push(
-					`${cp2Name} = ${applyTransformCall}${vecConstructor}(${x2}, ${y2}))`,
+				pointAssignments.push(
+					`${cp2Name} = ${applyTransformCall}${vecConstructor}(${x2}, ${y2}));`,
 				);
-				pointDeclarations.push(
-					`${nextPointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}))`,
+				pointAssignments.push(
+					`${nextPointName} = ${applyTransformCall}${vecConstructor}(${x}, ${y}));`,
 				);
 
 				lines.push(
@@ -746,10 +880,10 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 
 	flushCurrentShape();
 
-	const indentedPoints =
-		pointDeclarations.length > 0 ?
-			`\t${constKeyword} ${pointDeclarations.join(',\n\t\t')};`
-		:	'';
+	const globalLines = [
+		...formatGlobalPointDeclarations(pointNames, options),
+		formatPointArrayDeclaration(pointArrayName, options),
+	];
 	const indentedDrawCalls = shapeBlocks
 		.map(block =>
 			block
@@ -759,13 +893,22 @@ ${primitiveDeclarations}${primitiveDrawCalls}
 		)
 		.join('\n\n');
 
-	const pointsSection = indentedPoints ? `${indentedPoints}\n\n` : '';
+	const functionLines = [
+		...pointAssignments,
+		formatPointArrayAssignment(pointArrayName, pointNames, options),
+	];
+	const pointsSection =
+		functionLines.length > 0 ? `${indentLines(functionLines)}\n\n` : '';
 	const drawSection = indentedDrawCalls ? `${indentedDrawCalls}\n` : '';
 
 	const pathCode = `${functionDeclaration}
 ${pointsSection}${drawSection}}`;
 
-	return { sharedCode, pathCode };
+	return {
+		sharedCode,
+		globalCode: globalLines.join('\n'),
+		pathCode,
+	};
 }
 
 /**

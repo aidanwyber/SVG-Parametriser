@@ -55,6 +55,7 @@ export interface GeneratorOptions {
 
 export interface GeneratedCode {
 	sharedCode: string;
+	globalCode: string;
 	pathCode: string;
 }
 
