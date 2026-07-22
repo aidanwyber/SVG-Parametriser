@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { convertPathToP5, generateSharedCode } from '../src/generator';
+import {
+	convertPathToP5,
+	generateDrawAllPaths,
+	generateSharedCode,
+} from '../src/generator';
 import type { GeneratorOptions } from '../src/types';
 
 describe('convertPathToP5', () => {
@@ -123,4 +127,52 @@ describe('convertPathToP5', () => {
 		expect(sharedCode).toContain('// x -= fileCenterX;');
 		expect(sharedCode).toContain('// y -= fileCenterY;');
 	});
+
+	it.each(['createVector', 'Vec'] as const)(
+		'exports top-level constants and functions in TypeScript %s output',
+		vectorFormat => {
+			const options: GeneratorOptions = {
+				vectorFormat,
+				language: 'typescript',
+				coordMultiplier: 1,
+				precision: 0,
+			};
+
+			const sharedCode = generateSharedCode(options, {
+				minX: 0,
+				minY: 0,
+				maxX: 10,
+				maxY: 10,
+				width: 10,
+				height: 10,
+				centerX: 5,
+				centerY: 5,
+			});
+			const generated = convertPathToP5(
+				'M0 0 L10 10 Z',
+				options,
+				0,
+				undefined,
+				'drawPath1',
+			);
+			const drawAllCode = generateDrawAllPaths(
+				['drawPath1'],
+				options,
+			);
+
+			expect(sharedCode).toContain('export const fileMinX: number = 0,');
+			expect(sharedCode).toContain('export const transformConfig:');
+			expect(sharedCode).toContain('export function applyTransform(');
+			expect(sharedCode).toContain(
+				'export function applyTransformScalar(',
+			);
+			if (vectorFormat === 'Vec') {
+				expect(sharedCode).toContain('export const transform =');
+			}
+			expect(generated.pathCode).toContain(
+				'export function drawPath1()',
+			);
+			expect(drawAllCode).toContain('export function drawAllPaths()');
+		},
+	);
 });

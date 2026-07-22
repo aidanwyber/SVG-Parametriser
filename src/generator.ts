@@ -48,8 +48,9 @@ float fileCenterY = ${f(sourceBounds.centerY)};`;
 	}
 
 	const typeAnnotation = language === 'typescript' ? ': number' : '';
+	const exportPrefix = language === 'typescript' ? 'export ' : '';
 	return `// Source file bounds from generated vertices
-const fileMinX${typeAnnotation} = ${f(sourceBounds.minX)},
+${exportPrefix}const fileMinX${typeAnnotation} = ${f(sourceBounds.minX)},
 	fileMinY${typeAnnotation} = ${f(sourceBounds.minY)},
 	fileMaxX${typeAnnotation} = ${f(sourceBounds.maxX)},
 	fileMaxY${typeAnnotation} = ${f(sourceBounds.maxY)},
@@ -146,6 +147,7 @@ float applyTransformScalar(float value, char axis) {
 	if (vectorFormat === 'Vec') {
 		const boundsBlock = generateBoundsSetup(options, sourceBounds);
 		const centeringComment = generateVecTransformCenteringComment();
+		const exportPrefix = isTS ? 'export ' : '';
 		const configType =
 			isTS ?
 				`: {
@@ -160,7 +162,7 @@ float applyTransformScalar(float value, char axis) {
 			:	'';
 
 		return `${boundsBlock ? boundsBlock + '\n\n' : ''}// Transform configuration
-const transformConfig${configType} = {
+${exportPrefix}const transformConfig${configType} = {
 	preTranslateX: 0,
 	preTranslateY: 0,
 	scaleX: 1,
@@ -211,15 +213,15 @@ class Matrix2D {
 	}
 }
 
-const transform = Matrix2D.fromTransform(transformConfig);
+${exportPrefix}const transform = Matrix2D.fromTransform(transformConfig);
 
-function applyTransform(v${isTS ? ': Vec' : ''})${isTS ? ': Vec' : ''} {
+${exportPrefix}function applyTransform(v${isTS ? ': Vec' : ''})${isTS ? ': Vec' : ''} {
 ${centeringComment}
 	const [x, y] = transform.transform(v.x, v.y);
 	return new Vec(x, y);
 }
 
-function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
+${exportPrefix}function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
 			isTS ? ": 'x' | 'y' | 'avg'" : ''
 		} = 'avg')${isTS ? ': number' : ''} {
 	if (axis === 'x') {
@@ -242,9 +244,10 @@ function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
 		:	'';
 	const boundsBlock = generateBoundsSetup(options, sourceBounds);
 	const centeringComment = generateTransformCenteringComment();
+	const exportPrefix = isTS ? 'export ' : '';
 
 	return `${boundsBlock ? boundsBlock + '\n\n' : ''}// Transform configuration
-const transformConfig${
+${exportPrefix}const transformConfig${
 		isTS ?
 			`: {
 	preTranslateX: number;
@@ -266,7 +269,7 @@ const transformConfig${
 	translateY: 0
 };
 
-function applyTransform(${pParam ? pParam + ', ' : ''}v${
+${exportPrefix}function applyTransform(${pParam ? pParam + ', ' : ''}v${
 		isTS ? `: ${vecType}` : ''
 	})${isTS ? `: ${vecType}` : ''} {
 	let x = v.x + transformConfig.preTranslateX;
@@ -292,7 +295,7 @@ ${centeringComment}
 	return ${vecConstructor}(x, y);
 }
 
-function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
+${exportPrefix}function applyTransformScalar(value${isTS ? ': number' : ''}, axis${
 		isTS ? ": 'x' | 'y' | 'avg'" : ''
 	} = 'avg')${isTS ? ': number' : ''} {
 	if (axis === 'x') {
@@ -333,7 +336,8 @@ function getFunctionDeclaration(
 			isTS ? 'p: any'
 			:	'p'
 		:	'';
-	return `function ${functionName}(${params})${returnType} {`;
+	const exportPrefix = isTS ? 'export ' : '';
+	return `${exportPrefix}function ${functionName}(${params})${returnType} {`;
 }
 
 function getShapePrefix(options: GeneratorOptions): string {
@@ -1023,7 +1027,8 @@ export function generateDrawAllPaths(
 				isTS ? 'p: any'
 				:	'p'
 			:	'';
-		return `\nfunction ${drawFunctionName}(${params})${returnType} {\n${pathCalls}\n}`;
+		const exportPrefix = isTS ? 'export ' : '';
+		return `\n${exportPrefix}function ${drawFunctionName}(${params})${returnType} {\n${pathCalls}\n}`;
 	}
 }
 
