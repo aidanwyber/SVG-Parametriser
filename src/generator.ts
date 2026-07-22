@@ -344,6 +344,13 @@ function getShapePrefix(options: GeneratorOptions): string {
 	return isInstanceMode ? 'p.' : '';
 }
 
+function getShapeMode(
+	mode: 'CLOSE' | 'OPEN',
+	options: GeneratorOptions,
+): string {
+	return `${getShapePrefix(options)}${mode}`;
+}
+
 function getVectorType(options: GeneratorOptions): string {
 	const { vectorFormat, processingVector = 'PVector', language } = options;
 
@@ -607,7 +614,7 @@ function generatePrimitiveDrawLines(
 			);
 		});
 		drawCalls.push(
-			`${shapePrefix}endShape(${primitive.kind === 'polygon' ? 'CLOSE' : 'OPEN'});`,
+			`${shapePrefix}endShape(${getShapeMode(primitive.kind === 'polygon' ? 'CLOSE' : 'OPEN', options)});`,
 		);
 		return {
 			globalCode: [
@@ -878,7 +885,7 @@ ${indentLines(functionLines)}
 			[
 				`${shapePrefix}beginShape();`,
 				...currentShapeLines,
-				`${shapePrefix}endShape(${currentShapeClosed ? 'CLOSE' : 'OPEN'});`,
+				`${shapePrefix}endShape(${getShapeMode(currentShapeClosed ? 'CLOSE' : 'OPEN', options)});`,
 			].join('\n'),
 		);
 		currentShapeLines = [];

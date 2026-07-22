@@ -662,7 +662,9 @@ async function processSVGFiles(files: File[]): Promise<void> {
         `;
 	});
 
-	const sharedTransformCode = sharedCode.trim();
+	const codeHeader =
+		language === 'typescript' ? "import type p5 from 'p5';" : '';
+	const sharedTransformBody = sharedCode.trim();
 	const shapeFunctionsCode = shapeBlocksOrdered.join('\n\n').trim();
 
 	const perFileDrawAllCodes: string[] = [];
@@ -696,14 +698,20 @@ async function processSVGFiles(files: File[]): Promise<void> {
 		).trim();
 	}
 
-	const drawingCode = [
+	const drawingBody = [
 		topLevelDrawAllCode,
 		...perFileDrawAllCodes,
 		shapeFunctionsCode,
 	]
 		.filter(section => section.length > 0)
 		.join('\n\n');
-	const fullCode = [sharedTransformCode, drawingCode]
+	const sharedTransformCode = [codeHeader, sharedTransformBody]
+		.filter(section => section.length > 0)
+		.join('\n\n');
+	const drawingCode = [codeHeader, drawingBody]
+		.filter(section => section.length > 0)
+		.join('\n\n');
+	const fullCode = [codeHeader, sharedTransformBody, drawingBody]
 		.filter(section => section.length > 0)
 		.join('\n\n');
 
@@ -738,7 +746,7 @@ async function processSVGFiles(files: File[]): Promise<void> {
 				.filter(section => section.length > 0)
 				.join('\n\n')
 				.trim();
-			const fileDrawingCode = [fileDrawAllCode, filePathCode]
+			const fileDrawingCode = [codeHeader, fileDrawAllCode, filePathCode]
 				.filter(section => section.length > 0)
 				.join('\n\n');
 
